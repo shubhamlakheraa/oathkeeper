@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "db:check": "node --env-file=.env scripts/check-db.js"
+    "db:check": "node --env-file=.env scripts/check-db.js",
+    "db:migrate": "node --env-file=.env scripts/migrate.js"
   },
   "dependencies": {
     "argon2": "^0.44.0",
