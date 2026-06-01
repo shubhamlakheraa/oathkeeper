@@ -1,6 +1,7 @@
 const argon2 = require('argon2');
 
-const ARG2_CONFIG = {
+const DEFAULT_CONFIG = {
+  type: argon2.argon2id,
   memoryCost: 65536,
   timeCost: 3,
   parallelism: 1,
@@ -9,15 +10,25 @@ const ARG2_CONFIG = {
 /**
  * @typedef {Object} PasswordHasher
  * @property {(plaintext: string) => Promise<string>} hash
- * @property {(storedHash: string, plaintext: string ) => Promise<boolean>} verify
+ * @property {(plaintext: string, storedHash: string) => Promise<boolean>} verify
  */
 
-async function hash(plaintext) {
-  return argon2.hash(plaintext, ARG2_CONFIG);
+/**
+ * Creates an argon2id-backed PasswordHasher.
+ * Any omitted fields fall back to safe defaults (argon2id, 64MB, t=3, p=1).
+ * @param {object} [config={}] argon2 options to override (memoryCost, timeCost, parallelism, type).
+ * @returns {PasswordHasher}
+ */
+function createArgon2Hasher(config = {}) {
+  const merged = { ...DEFAULT_CONFIG, ...config };
+  return {
+    async hash(plaintext) {
+      return argon2.hash(plaintext, merged);
+    },
+    async verify(plaintext, storedHash) {
+      return argon2.verify(storedHash, plaintext);
+    },
+  };
 }
 
-async function verify(storedHash, plaintext) {
-  return argon2.verify(storedHash, plaintext);
-}
-
-module.exports = { hash, verify };
+module.exports = { createArgon2Hasher };

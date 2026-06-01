@@ -1,4 +1,6 @@
-const { hash, verify } = require('../src/adapters/hasher/argon2Hasher');
+const { createArgon2Hasher } = require('../src/adapters/hasher/argon2Hasher');
+
+const { hash, verify } = createArgon2Hasher();
 
 describe('argon2Hasher.hash', () => {
   it('returns a string starting with "$argon2id$"', async () => {
@@ -24,11 +26,21 @@ describe('argon2Hasher.hash', () => {
 describe('argon2Hasher.verify', () => {
   it('returns true when plaintext matches the stored hash', async () => {
     const stored = await hash('hunter2');
-    expect(await verify(stored, 'hunter2')).toBe(true);
+    expect(await verify('hunter2', stored)).toBe(true);
   });
 
   it('returns false when plaintext does not match the stored hash', async () => {
     const stored = await hash('hunter2');
-    expect(await verify(stored, 'hunter3')).toBe(false);
+    expect(await verify('hunter3', stored)).toBe(false);
+  });
+
+  it('rejects (or returns false) for a malformed hash string', async () => {
+    await expect(verify('hunter2', 'not-a-hash')).rejects.toThrow();
+  });
+
+  it('handles empty plaintext consistently', async () => {
+    const h = await hash('');
+    expect(await verify('', h)).toBe(true);
+    expect(await verify('x', h)).toBe(false);
   });
 });
