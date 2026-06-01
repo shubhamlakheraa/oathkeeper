@@ -26,4 +26,9 @@ describe('timingSafeEqual', () => {
   it('treats a Buffer and a string with the same bytes as equal', () => {
     expect(timingSafeEqual(Buffer.from('abc'), 'abc')).toBe(true);
   });
+  it('returns false in constant time regardless of length difference', () => {
+    // Hard to assert timing strictly; assert the path runs without throw.
+    expect(timingSafeEqual('a', 'abcdefghij')).toBe(false);
+    expect(timingSafeEqual('abcdefghij', 'a')).toBe(false);
+  });
 });
