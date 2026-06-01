@@ -6,6 +6,9 @@
   "author": "Shubham Lakhera",
   "type": "commonjs",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
