@@ -44,11 +44,66 @@ describe('postgresStorage (integration)', () => {
       expect(user.email).toBe('alice@example.com');
     });
 
-    it('rejects duplicate emails (UNIQUE constraint)', async () => {
+    it('rejects duplicate emails with code EMAIL_TAKEN', async () => {
       await storage.createUser({ email: 'x@y.com', passwordHash: 'h' });
       await expect(
         storage.createUser({ email: 'x@y.com', passwordHash: 'h2' }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: 'EMAIL_TAKEN' });
+    });
+  });
+
+  describe('getCredentialByEmail', () => {
+    it('returns id, email and password_hash for an active user', async () => {
+      await storage.createUser({ email: 'c@x.com', passwordHash: 'stored-hash' });
+      const cred = await storage.getCredentialByEmail('c@x.com');
+      expect(cred).toMatchObject({ email: 'c@x.com', password_hash: 'stored-hash' });
+      expect(cred.id).toEqual(expect.any(String));
+    });
+
+    it('is case-insensitive', async () => {
+      await storage.createUser({ email: 'c@x.com', passwordHash: 'h' });
+      const cred = await storage.getCredentialByEmail('C@X.COM');
+      expect(cred).not.toBeNull();
+    });
+
+    it('returns null for missing user', async () => {
+      const cred = await storage.getCredentialByEmail('missing@x.com');
+      expect(cred).toBeNull();
+    });
+
+    it('returns null for soft-deleted user', async () => {
+      const u = await storage.createUser({ email: 'c@x.com', passwordHash: 'h' });
+      await storage.softDeleteUser(u.id);
+      const cred = await storage.getCredentialByEmail('c@x.com');
+      expect(cred).toBeNull();
+    });
+  });
+
+  describe('getMfaSecret', () => {
+    it('returns the mfa_secret for an active user', async () => {
+      const u = await storage.createUser({ email: 'm@x.com', passwordHash: 'h' });
+      await storage.updateUser(u.id, { mfa_secret: 'TOTP-SECRET' });
+      const secret = await storage.getMfaSecret(u.id);
+      expect(secret).toBe('TOTP-SECRET');
+    });
+
+    it('returns null when no secret is set', async () => {
+      const u = await storage.createUser({ email: 'm@x.com', passwordHash: 'h' });
+      const secret = await storage.getMfaSecret(u.id);
+      expect(secret).toBeNull();
+    });
+
+    it('returns null for a missing user', async () => {
+      const secret = await storage.getMfaSecret('00000000-0000-0000-0000-000000000000');
+      expect(secret).toBeNull();
+    });
+
+    it('returns null for a soft-deleted user', async () => {
+      const u = await storage.createUser({ email: 'm@x.com', passwordHash: 'h' });
+      await storage.updateUser(u.id, { mfa_secret: 'TOTP-SECRET' });
+      await storage.softDeleteUser(u.id);
+      const secret = await storage.getMfaSecret(u.id);
+      expect(secret).toBeNull();
     });
   });
 
@@ -83,6 +138,13 @@ describe('postgresStorage (integration)', () => {
       const found = await storage.getUserByEmail('s@x.com');
       expect(found).not.toHaveProperty('password_hash');
     });
+
+    it('omits mfa_secret from the returned row', async () => {
+      const u = await storage.createUser({ email: 's@x.com', passwordHash: 'h' });
+      await storage.updateUser(u.id, { mfa_secret: 'TOTP-SECRET' });
+      const found = await storage.getUserByEmail('s@x.com');
+      expect(found).not.toHaveProperty('mfa_secret');
+    });
   });
 
   describe('getUserById', () => {
@@ -102,6 +164,13 @@ describe('postgresStorage (integration)', () => {
       await storage.softDeleteUser(u.id);
       const found = await storage.getUserById(u.id);
       expect(found).toBeNull();
+    });
+
+    it('omits mfa_secret from the returned row', async () => {
+      const u = await storage.createUser({ email: 's@x.com', passwordHash: 'h' });
+      await storage.updateUser(u.id, { mfa_secret: 'TOTP-SECRET' });
+      const found = await storage.getUserById(u.id);
+      expect(found).not.toHaveProperty('mfa_secret');
     });
   });
 
@@ -124,6 +193,13 @@ describe('postgresStorage (integration)', () => {
       await expect(storage.updateUser(u.id, { email: 'evil@x.com' })).rejects.toThrow(
         /not patchable/i,
       );
+    });
+
+    it('returns the current user unchanged when patches is empty', async () => {
+      const u = await storage.createUser({ email: 'a@b.com', passwordHash: 'h' });
+      const result = await storage.updateUser(u.id, {});
+      expect(result.id).toBe(u.id);
+      expect(result.email).toBe('a@b.com');
     });
 
     it('returns null when patching a soft-deleted user', async () => {
