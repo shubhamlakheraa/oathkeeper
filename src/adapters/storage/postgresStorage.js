@@ -86,6 +86,48 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
+  async function saveRefreshToken(userId, tokenHash, familyId, expiresAt, userAgent, ip) {
+    const result = await pool.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, user_agent, ip)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *`,
+      [userId, tokenHash, familyId, expiresAt, userAgent, ip],
+    );
+    return result.rows[0] || null;
+  }
+
+  async function findRefreshToken(tokenHash) {
+    const result = await pool.quer(`
+        SELECT * FROM refresh_tokens WHERE token_hash = $1`)[tokenHash];
+    return result.rows[0] || null;
+  }
+
+  async function rotateRefreshToken({ tokenHash, replacedById }) {
+    const fetch = await pool.query(
+      `
+        SELECT * FROM refresh_tokens WHERE token_hash = $1
+        `,
+      [tokenHash],
+    );
+    const token = fetch.rows[0] || null;
+    if (!token) return { status: 'NOT_FOUND', token: null };
+    if (token.revoked_at) return { status: 'ALREADY_REVOKED', token };
+
+    const result = await pool.query(
+      `
+        UPDATE refresh_tokens SET revoked_at = now(), replaced_by_id = $1 WHERE token_hash = $2 AND revoked_at IS NULL RETURNING *`,
+      [replacedById, tokenHash],
+    );
+    return { status: 'SUCCESS', token: result.rows[0] };
+  }
+
+  async function revokeRefreshToken(tokenHash){
+    const result  = await pool.query(
+        `UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 and revoked_at IS NULL RETURNING *`,[tokenHash]
+    );
+    return result.rows[0] || null
+  }
+
   return {
     createUser,
     getUserByEmail,
@@ -94,6 +136,10 @@ function createPostgresStorage(pool) {
     getMfaSecret,
     softDeleteUser,
     updateUser,
+    saveRefreshToken,
+    findRefreshToken,
+    rotateRefreshToken,
+    revokeRefreshToken
   };
 }
 
