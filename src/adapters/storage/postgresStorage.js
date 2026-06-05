@@ -128,6 +128,35 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null
   }
 
+  async function revokeRefreshTokenFamily(familyId){
+    const result = await pool.query(
+        `UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 and revoked_at IS NULL RETURNING *
+        `,[familyId]
+    );
+    return result.rows[0] || null
+  }
+
+  async function revokeAllRefreshTokensForUser(userId) {
+    const result = await pool.query(
+        `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 and revoked_at IS NULL RETURNING *
+        `,[userId]
+    );
+    return result.rows[0] || null
+  }
+  async function listActiveSessions(userId) {
+    const result = await pool.query(
+      `SELECT id, user_agent, ip, issued_at, expires_at 
+       FROM refresh_tokens 
+       WHERE user_id = $1 
+         AND revoked_at IS NULL 
+         AND expires_at > now()
+       ORDER BY issued_at DESC`,
+      [userId]
+    );
+    return result.rows;
+  }
+
+
   return {
     createUser,
     getUserByEmail,
@@ -139,7 +168,10 @@ function createPostgresStorage(pool) {
     saveRefreshToken,
     findRefreshToken,
     rotateRefreshToken,
-    revokeRefreshToken
+    revokeRefreshToken,
+    revokeRefreshTokenFamily,
+    revokeAllRefreshTokensForUser,
+    listActiveSessions
   };
 }
 
