@@ -97,8 +97,10 @@ function createPostgresStorage(pool) {
   }
 
   async function findRefreshToken(tokenHash) {
-    const result = await pool.quer(`
-        SELECT * FROM refresh_tokens WHERE token_hash = $1`)[tokenHash];
+    const result = await pool.query(
+      `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
+      [tokenHash],
+    );
     return result.rows[0] || null;
   }
 
@@ -121,27 +123,30 @@ function createPostgresStorage(pool) {
     return { status: 'SUCCESS', token: result.rows[0] };
   }
 
-  async function revokeRefreshToken(tokenHash){
-    const result  = await pool.query(
-        `UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 and revoked_at IS NULL RETURNING *`,[tokenHash]
+  async function revokeRefreshToken(tokenHash) {
+    const result = await pool.query(
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 and revoked_at IS NULL RETURNING *`,
+      [tokenHash],
     );
-    return result.rows[0] || null
+    return result.rows[0] || null;
   }
 
-  async function revokeRefreshTokenFamily(familyId){
+  async function revokeRefreshTokenFamily(familyId) {
     const result = await pool.query(
-        `UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 and revoked_at IS NULL RETURNING *
-        `,[familyId]
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 and revoked_at IS NULL RETURNING *
+        `,
+      [familyId],
     );
-    return result.rows[0] || null
+    return result.rows[0] || null;
   }
 
   async function revokeAllRefreshTokensForUser(userId) {
     const result = await pool.query(
-        `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 and revoked_at IS NULL RETURNING *
-        `,[userId]
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 and revoked_at IS NULL RETURNING *
+        `,
+      [userId],
     );
-    return result.rows[0] || null
+    return result.rows[0] || null;
   }
   async function listActiveSessions(userId) {
     const result = await pool.query(
@@ -151,11 +156,105 @@ function createPostgresStorage(pool) {
          AND revoked_at IS NULL 
          AND expires_at > now()
        ORDER BY issued_at DESC`,
-      [userId]
+      [userId],
     );
     return result.rows;
   }
 
+  async function saveToken(userId, tokenHash, expiresAt, type) {
+    const result = await pool.query(
+      `
+        INSERT INTO ${type}_tokens (user_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+        RETURNING *
+        `,
+      [userId, tokenHash, expiresAt],
+    );
+    return result.rows[0] || null;
+  }
+  async function consumeToken(tokenHash, type) {
+    const result = await pool.query(
+      `UPDATE ${type}_tokens
+       SET used_at = now()
+       WHERE token_hash = $1
+         AND used_at IS NULL
+         AND expires_at > now()
+       RETURNING *`,
+      [tokenHash],
+    );
+    return result.rows[0] || null;
+  }
+
+  async function saveMfaRecoveryCodes(userId, codeHashes) {
+    const result = await pool.query(
+      `INSERT INTO mfa_recovery_codes (user_id, code_hash)
+       SELECT $1, UNNEST($2::text[])
+       RETURNING *`,
+      [userId, codeHashes],
+    );
+    return result.rows;
+  }
+
+  async function consumeMfaRecoveryCode(codeId) {
+    const result = await pool.query(
+      `UPDATE mfa_recovery_codes
+       SET used_at = now()
+       WHERE id = $1 AND used_at IS NULL
+       RETURNING id`,
+      [codeId],
+    );
+    return result.rowCount > 0;
+  }
+
+  async function assignRole(userId, roleId) {
+    await pool.query(
+      `INSERT INTO user_roles (user_id, role_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, role_id) DO NOTHING`,
+      [userId, roleId],
+    );
+  }
+
+  async function removeRole(userId, roleId) {
+    const result = await pool.query(
+      `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`,
+      [userId, roleId],
+    );
+    return result.rowCount > 0;
+  }
+
+  async function getRolesForUser(userId) {
+    const result = await pool.query(
+      `SELECT r.id, r.name
+       FROM roles r
+       JOIN user_roles ur ON ur.role_id = r.id
+       WHERE ur.user_id = $1`,
+      [userId],
+    );
+    return result.rows;
+  }
+
+  async function getUserPermissions(userId) {
+    const result = await pool.query(
+      `SELECT DISTINCT p.name
+       FROM permissions p
+       JOIN role_permissions rp ON rp.permission_id = p.id
+       JOIN user_roles ur ON ur.role_id = rp.role_id
+       WHERE ur.user_id = $1`,
+      [userId],
+    );
+    return new Set(result.rows.map((r) => r.name));
+  }
+
+  async function logEvent({ userId = null, type, ip = null, userAgent = null, metadata = null }) {
+    const result = await pool.query(
+      `INSERT INTO auth_events (user_id, type, ip, user_agent, metadata)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [userId, type, ip, userAgent, metadata],
+    );
+    return result.rows[0];
+  }
 
   return {
     createUser,
@@ -171,7 +270,16 @@ function createPostgresStorage(pool) {
     revokeRefreshToken,
     revokeRefreshTokenFamily,
     revokeAllRefreshTokensForUser,
-    listActiveSessions
+    listActiveSessions,
+    consumeToken,
+    saveToken,
+    saveMfaRecoveryCodes,
+    consumeMfaRecoveryCode,
+    assignRole,
+    removeRole,
+    getRolesForUser,
+    getUserPermissions,
+    logEvent,
   };
 }
 
