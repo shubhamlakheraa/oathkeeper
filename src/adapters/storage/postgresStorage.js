@@ -8,6 +8,8 @@ const ALLOWED_PATCH_FIELDS = new Set([
   'last_login_at',
 ]);
 
+const ALLOWED_TOKEN_TYPES = new Set(['email_verification', 'password_reset']);
+
 function createPostgresStorage(pool) {
   async function createUser({ email, passwordHash }) {
     try {
@@ -96,7 +98,7 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function findRefreshToken(tokenHash) {
+  async function getRefreshToken(tokenHash) {
     const result = await pool.query(
       `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
       [tokenHash],
@@ -105,48 +107,44 @@ function createPostgresStorage(pool) {
   }
 
   async function rotateRefreshToken({ tokenHash, replacedById }) {
-    const fetch = await pool.query(
-      `
-        SELECT * FROM refresh_tokens WHERE token_hash = $1
-        `,
-      [tokenHash],
-    );
-    const token = fetch.rows[0] || null;
-    if (!token) return { status: 'NOT_FOUND', token: null };
-    if (token.revoked_at) return { status: 'ALREADY_REVOKED', token };
-
-    const result = await pool.query(
-      `
-        UPDATE refresh_tokens SET revoked_at = now(), replaced_by_id = $1 WHERE token_hash = $2 AND revoked_at IS NULL RETURNING *`,
+    const update = await pool.query(
+      `UPDATE refresh_tokens SET revoked_at = now(), replaced_by_id = $1
+       WHERE token_hash = $2 AND revoked_at IS NULL
+       RETURNING *`,
       [replacedById, tokenHash],
     );
-    return { status: 'SUCCESS', token: result.rows[0] };
+    if (update.rows[0]) return { status: 'SUCCESS', token: update.rows[0] };
+
+    const check = await pool.query(
+      `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
+      [tokenHash],
+    );
+    if (!check.rows[0]) return { status: 'NOT_FOUND', token: null };
+    return { status: 'ALREADY_REVOKED', token: check.rows[0] };
   }
 
   async function revokeRefreshToken(tokenHash) {
     const result = await pool.query(
-      `UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 and revoked_at IS NULL RETURNING *`,
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`,
       [tokenHash],
     );
-    return result.rows[0] || null;
+    return result.rowCount > 0;
   }
 
   async function revokeRefreshTokenFamily(familyId) {
     const result = await pool.query(
-      `UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 and revoked_at IS NULL RETURNING *
-        `,
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL`,
       [familyId],
     );
-    return result.rows[0] || null;
+    return result.rowCount;
   }
 
   async function revokeAllRefreshTokensForUser(userId) {
     const result = await pool.query(
-      `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 and revoked_at IS NULL RETURNING *
-        `,
+      `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
       [userId],
     );
-    return result.rows[0] || null;
+    return result.rowCount;
   }
   async function listActiveSessions(userId) {
     const result = await pool.query(
@@ -161,18 +159,25 @@ function createPostgresStorage(pool) {
     return result.rows;
   }
 
+  function assertAllowedTokenType(type) {
+    if (!ALLOWED_TOKEN_TYPES.has(type)) {
+      throw new Error(`Unknown token type: ${type}`);
+    }
+  }
+
   async function saveToken(userId, tokenHash, expiresAt, type) {
+    assertAllowedTokenType(type);
     const result = await pool.query(
-      `
-        INSERT INTO ${type}_tokens (user_id, token_hash, expires_at)
-        VALUES ($1, $2, $3)
-        RETURNING *
-        `,
+      `INSERT INTO ${type}_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
       [userId, tokenHash, expiresAt],
     );
     return result.rows[0] || null;
   }
+
   async function consumeToken(tokenHash, type) {
+    assertAllowedTokenType(type);
     const result = await pool.query(
       `UPDATE ${type}_tokens
        SET used_at = now()
@@ -200,10 +205,10 @@ function createPostgresStorage(pool) {
       `UPDATE mfa_recovery_codes
        SET used_at = now()
        WHERE id = $1 AND used_at IS NULL
-       RETURNING id`,
+       RETURNING *`,
       [codeId],
     );
-    return result.rowCount > 0;
+    return result.rows[0] || null;
   }
 
   async function assignRole(userId, roleId) {
@@ -265,7 +270,7 @@ function createPostgresStorage(pool) {
     softDeleteUser,
     updateUser,
     saveRefreshToken,
-    findRefreshToken,
+    getRefreshToken,
     rotateRefreshToken,
     revokeRefreshToken,
     revokeRefreshTokenFamily,

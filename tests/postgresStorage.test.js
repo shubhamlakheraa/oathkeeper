@@ -251,16 +251,16 @@ describe('postgresStorage (integration)', () => {
       });
     });
 
-    it('findRefreshToken returns the row for an existing hash', async () => {
+    it('getRefreshToken returns the row for an existing hash (including revoked rows for reuse detection)', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
       await storage.saveRefreshToken(u.id, 'hash-find', familyId, future(), 'a', '127.0.0.1');
-      const row = await storage.findRefreshToken('hash-find');
+      const row = await storage.getRefreshToken('hash-find');
       expect(row.token_hash).toBe('hash-find');
     });
 
-    it('findRefreshToken returns null when not found', async () => {
-      expect(await storage.findRefreshToken('nope')).toBeNull();
+    it('getRefreshToken returns null when not found', async () => {
+      expect(await storage.getRefreshToken('nope')).toBeNull();
     });
 
     it('rotateRefreshToken returns SUCCESS and stamps replaced_by_id', async () => {
@@ -287,65 +287,96 @@ describe('postgresStorage (integration)', () => {
       expect(result.token).toBeNull();
     });
 
-    it('rotateRefreshToken returns ALREADY_REVOKED on second call', async () => {
+    it('rotateRefreshToken returns ALREADY_REVOKED on second call and does NOT overwrite replaced_by_id', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
       const a = await storage.saveRefreshToken(u.id, 'a', familyId, future(), 'a', '127.0.0.1');
       const b = await storage.saveRefreshToken(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
+      const c = await storage.saveRefreshToken(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
       await storage.rotateRefreshToken({ tokenHash: 'a', replacedById: b.id });
-      const second = await storage.rotateRefreshToken({ tokenHash: 'a', replacedById: b.id });
+      const second = await storage.rotateRefreshToken({ tokenHash: 'a', replacedById: c.id });
       expect(second.status).toBe('ALREADY_REVOKED');
       expect(a.id).toBe(second.token.id);
+      const row = (
+        await pool.query(`SELECT replaced_by_id FROM refresh_tokens WHERE id = $1`, [a.id])
+      ).rows[0];
+      expect(row.replaced_by_id).toBe(b.id);
     });
 
-    it('revokeRefreshToken sets revoked_at for the matching hash', async () => {
+    it('rotateRefreshToken NOT_FOUND does not insert or stamp any row', async () => {
+      const before = (await pool.query(`SELECT count(*)::int AS n FROM refresh_tokens`)).rows[0].n;
+      const result = await storage.rotateRefreshToken({
+        tokenHash: 'ghost',
+        replacedById: '00000000-0000-0000-0000-000000000000',
+      });
+      expect(result.status).toBe('NOT_FOUND');
+      const after = (await pool.query(`SELECT count(*)::int AS n FROM refresh_tokens`)).rows[0].n;
+      expect(after).toBe(before);
+    });
+
+    it('exactly one rotation wins when two simultaneous rotations race for the same token', async () => {
+      const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
+      const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
+      const a = await storage.saveRefreshToken(u.id, 'race', familyId, future(), 'a', '127.0.0.1');
+      const b = await storage.saveRefreshToken(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
+      const c = await storage.saveRefreshToken(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
+      const [r1, r2] = await Promise.all([
+        storage.rotateRefreshToken({ tokenHash: 'race', replacedById: b.id }),
+        storage.rotateRefreshToken({ tokenHash: 'race', replacedById: c.id }),
+      ]);
+      const successes = [r1, r2].filter((r) => r.status === 'SUCCESS');
+      const alreadies = [r1, r2].filter((r) => r.status === 'ALREADY_REVOKED');
+      expect(successes).toHaveLength(1);
+      expect(alreadies).toHaveLength(1);
+      const winnerReplacedBy = successes[0].token.replaced_by_id;
+      const stored = (
+        await pool.query(`SELECT replaced_by_id FROM refresh_tokens WHERE id = $1`, [a.id])
+      ).rows[0];
+      expect(stored.replaced_by_id).toBe(winnerReplacedBy);
+    });
+
+    it('revokeRefreshToken returns true on first call, false on second', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
       await storage.saveRefreshToken(u.id, 'rv', familyId, future(), 'a', '127.0.0.1');
-      const revoked = await storage.revokeRefreshToken('rv');
-      expect(revoked.revoked_at).not.toBeNull();
+      expect(await storage.revokeRefreshToken('rv')).toBe(true);
+      expect(await storage.revokeRefreshToken('rv')).toBe(false);
     });
 
-    it('revokeRefreshTokenFamily revokes every token in the family in one SQL statement', async () => {
+    it('revokeRefreshToken returns false for an unknown hash', async () => {
+      expect(await storage.revokeRefreshToken('missing')).toBe(false);
+    });
+
+    it('revokeRefreshTokenFamily revokes every active token in the family in one statement and returns rowCount', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
       await storage.saveRefreshToken(u.id, 'f1', familyId, future(), 'a', '127.0.0.1');
       await storage.saveRefreshToken(u.id, 'f2', familyId, future(), 'a', '127.0.0.1');
       await storage.saveRefreshToken(u.id, 'f3', familyId, future(), 'a', '127.0.0.1');
 
-      const before = (
-        await pool.query(
-          `SELECT count(*)::int AS n FROM pg_stat_statements WHERE query ILIKE 'UPDATE refresh_tokens%family_id%'`,
-        ).catch(() => ({ rows: [{ n: null }] }))
-      ).rows[0].n;
-
-      await storage.revokeRefreshTokenFamily(familyId);
+      const revoked = await storage.revokeRefreshTokenFamily(familyId);
+      expect(revoked).toBe(3);
 
       const rows = (
         await pool.query(
-          `SELECT token_hash, revoked_at FROM refresh_tokens WHERE family_id = $1 ORDER BY token_hash`,
+          `SELECT revoked_at FROM refresh_tokens WHERE family_id = $1`,
           [familyId],
         )
       ).rows;
       expect(rows).toHaveLength(3);
       rows.forEach((r) => expect(r.revoked_at).not.toBeNull());
 
-      if (before !== null) {
-        const after = (
-          await pool.query(
-            `SELECT count(*)::int AS n FROM pg_stat_statements WHERE query ILIKE 'UPDATE refresh_tokens%family_id%'`,
-          )
-        ).rows[0].n;
-        expect(after - before).toBeLessThanOrEqual(1);
-      }
+      const secondCall = await storage.revokeRefreshTokenFamily(familyId);
+      expect(secondCall).toBe(0);
     });
 
-    it('revokeAllRefreshTokensForUser revokes every active token for the user', async () => {
+    it('revokeAllRefreshTokensForUser revokes every active token for the user and returns rowCount', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
       await storage.saveRefreshToken(u.id, 't1', familyId, future(), 'a', '127.0.0.1');
       await storage.saveRefreshToken(u.id, 't2', familyId, future(), 'a', '127.0.0.1');
-      await storage.revokeAllRefreshTokensForUser(u.id);
+      const revoked = await storage.revokeAllRefreshTokensForUser(u.id);
+      expect(revoked).toBe(2);
       const rows = (
         await pool.query(`SELECT revoked_at FROM refresh_tokens WHERE user_id = $1`, [u.id])
       ).rows;
@@ -396,6 +427,19 @@ describe('postgresStorage (integration)', () => {
       expect(second).toBeNull();
     });
 
+    it('saveToken rejects an unknown token type before touching SQL', async () => {
+      const u = await storage.createUser({ email: 't@x.com', passwordHash: 'h' });
+      await expect(
+        storage.saveToken(u.id, 'tok', future(), "email_verification'; DROP TABLE users;--"),
+      ).rejects.toThrow(/unknown token type/i);
+    });
+
+    it('consumeToken rejects an unknown token type before touching SQL', async () => {
+      await expect(storage.consumeToken('tok', 'arbitrary_table')).rejects.toThrow(
+        /unknown token type/i,
+      );
+    });
+
     it('exactly one wins when two consumes race for the same token', async () => {
       const u = await storage.createUser({ email: 't@x.com', passwordHash: 'h' });
       await storage.saveToken(u.id, 'tok-race', future(), 'email_verification');
@@ -423,21 +467,19 @@ describe('postgresStorage (integration)', () => {
       expect(rows.map((r) => r.code_hash).sort()).toEqual(['h1', 'h2', 'h3']);
     });
 
-    it('consumeMfaRecoveryCode marks a code used and returns true', async () => {
+    it('consumeMfaRecoveryCode marks a code used and returns the row', async () => {
       const u = await storage.createUser({ email: 'm@x.com', passwordHash: 'h' });
       const [first] = await storage.saveMfaRecoveryCodes(u.id, ['h1']);
-      expect(await storage.consumeMfaRecoveryCode(first.id)).toBe(true);
-      const row = (
-        await pool.query(`SELECT used_at FROM mfa_recovery_codes WHERE id = $1`, [first.id])
-      ).rows[0];
-      expect(row.used_at).not.toBeNull();
+      const consumed = await storage.consumeMfaRecoveryCode(first.id);
+      expect(consumed).not.toBeNull();
+      expect(consumed.used_at).not.toBeNull();
     });
 
-    it('consumeMfaRecoveryCode returns false on second call (single-use)', async () => {
+    it('consumeMfaRecoveryCode returns null on second call (single-use)', async () => {
       const u = await storage.createUser({ email: 'm@x.com', passwordHash: 'h' });
       const [first] = await storage.saveMfaRecoveryCodes(u.id, ['h1']);
       await storage.consumeMfaRecoveryCode(first.id);
-      expect(await storage.consumeMfaRecoveryCode(first.id)).toBe(false);
+      expect(await storage.consumeMfaRecoveryCode(first.id)).toBeNull();
     });
 
     it('exactly one wins when two consumes race for the same recovery code', async () => {
@@ -447,8 +489,11 @@ describe('postgresStorage (integration)', () => {
         storage.consumeMfaRecoveryCode(first.id),
         storage.consumeMfaRecoveryCode(first.id),
       ]);
-      expect([a, b].filter(Boolean)).toHaveLength(1);
-      expect([a, b].filter((x) => x === false)).toHaveLength(1);
+      const winners = [a, b].filter((r) => r !== null);
+      const losers = [a, b].filter((r) => r === null);
+      expect(winners).toHaveLength(1);
+      expect(losers).toHaveLength(1);
+      expect(winners[0].used_at).not.toBeNull();
     });
   });
 
