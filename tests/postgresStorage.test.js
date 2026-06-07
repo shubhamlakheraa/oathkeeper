@@ -231,18 +231,13 @@ describe('postgresStorage (integration)', () => {
 
   describe('refresh tokens', () => {
     const future = () => new Date(Date.now() + 60_000);
+    const save = (userId, tokenHash, familyId, expiresAt, userAgent, ip) =>
+      storage.saveRefreshToken({ userId, tokenHash, familyId, expiresAt, userAgent, ip });
 
     it('saveRefreshToken inserts and returns the row', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      const row = await storage.saveRefreshToken(
-        u.id,
-        'hash-1',
-        familyId,
-        future(),
-        'agent',
-        '127.0.0.1',
-      );
+      const row = await save(u.id, 'hash-1', familyId, future(), 'agent', '127.0.0.1');
       expect(row).toMatchObject({
         user_id: u.id,
         token_hash: 'hash-1',
@@ -254,7 +249,7 @@ describe('postgresStorage (integration)', () => {
     it('getRefreshToken returns the row for an existing hash (including revoked rows for reuse detection)', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      await storage.saveRefreshToken(u.id, 'hash-find', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'hash-find', familyId, future(), 'a', '127.0.0.1');
       const row = await storage.getRefreshToken('hash-find');
       expect(row.token_hash).toBe('hash-find');
     });
@@ -266,8 +261,8 @@ describe('postgresStorage (integration)', () => {
     it('rotateRefreshToken returns SUCCESS and stamps replaced_by_id', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      const old = await storage.saveRefreshToken(u.id, 'old', familyId, future(), 'a', '127.0.0.1');
-      const next = await storage.saveRefreshToken(u.id, 'new', familyId, future(), 'a', '127.0.0.1');
+      const old = await save(u.id, 'old', familyId, future(), 'a', '127.0.0.1');
+      const next = await save(u.id, 'new', familyId, future(), 'a', '127.0.0.1');
       const result = await storage.rotateRefreshToken({
         tokenHash: 'old',
         replacedById: next.id,
@@ -290,9 +285,9 @@ describe('postgresStorage (integration)', () => {
     it('rotateRefreshToken returns ALREADY_REVOKED on second call and does NOT overwrite replaced_by_id', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      const a = await storage.saveRefreshToken(u.id, 'a', familyId, future(), 'a', '127.0.0.1');
-      const b = await storage.saveRefreshToken(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
-      const c = await storage.saveRefreshToken(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
+      const a = await save(u.id, 'a', familyId, future(), 'a', '127.0.0.1');
+      const b = await save(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
+      const c = await save(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
       await storage.rotateRefreshToken({ tokenHash: 'a', replacedById: b.id });
       const second = await storage.rotateRefreshToken({ tokenHash: 'a', replacedById: c.id });
       expect(second.status).toBe('ALREADY_REVOKED');
@@ -317,9 +312,9 @@ describe('postgresStorage (integration)', () => {
     it('exactly one rotation wins when two simultaneous rotations race for the same token', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      const a = await storage.saveRefreshToken(u.id, 'race', familyId, future(), 'a', '127.0.0.1');
-      const b = await storage.saveRefreshToken(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
-      const c = await storage.saveRefreshToken(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
+      const a = await save(u.id, 'race', familyId, future(), 'a', '127.0.0.1');
+      const b = await save(u.id, 'b', familyId, future(), 'a', '127.0.0.1');
+      const c = await save(u.id, 'c', familyId, future(), 'a', '127.0.0.1');
       const [r1, r2] = await Promise.all([
         storage.rotateRefreshToken({ tokenHash: 'race', replacedById: b.id }),
         storage.rotateRefreshToken({ tokenHash: 'race', replacedById: c.id }),
@@ -338,7 +333,7 @@ describe('postgresStorage (integration)', () => {
     it('revokeRefreshToken returns true on first call, false on second', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      await storage.saveRefreshToken(u.id, 'rv', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'rv', familyId, future(), 'a', '127.0.0.1');
       expect(await storage.revokeRefreshToken('rv')).toBe(true);
       expect(await storage.revokeRefreshToken('rv')).toBe(false);
     });
@@ -350,9 +345,9 @@ describe('postgresStorage (integration)', () => {
     it('revokeRefreshTokenFamily revokes every active token in the family in one statement and returns rowCount', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      await storage.saveRefreshToken(u.id, 'f1', familyId, future(), 'a', '127.0.0.1');
-      await storage.saveRefreshToken(u.id, 'f2', familyId, future(), 'a', '127.0.0.1');
-      await storage.saveRefreshToken(u.id, 'f3', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'f1', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'f2', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'f3', familyId, future(), 'a', '127.0.0.1');
 
       const revoked = await storage.revokeRefreshTokenFamily(familyId);
       expect(revoked).toBe(3);
@@ -373,8 +368,8 @@ describe('postgresStorage (integration)', () => {
     it('revokeAllRefreshTokensForUser revokes every active token for the user and returns rowCount', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      await storage.saveRefreshToken(u.id, 't1', familyId, future(), 'a', '127.0.0.1');
-      await storage.saveRefreshToken(u.id, 't2', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 't1', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 't2', familyId, future(), 'a', '127.0.0.1');
       const revoked = await storage.revokeAllRefreshTokensForUser(u.id);
       expect(revoked).toBe(2);
       const rows = (
@@ -386,8 +381,8 @@ describe('postgresStorage (integration)', () => {
     it('listActiveSessions returns active, unrevoked, unexpired tokens', async () => {
       const u = await storage.createUser({ email: 'r@x.com', passwordHash: 'h' });
       const familyId = (await pool.query('SELECT gen_random_uuid() AS id')).rows[0].id;
-      await storage.saveRefreshToken(u.id, 'active', familyId, future(), 'a', '127.0.0.1');
-      await storage.saveRefreshToken(u.id, 'revoked', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'active', familyId, future(), 'a', '127.0.0.1');
+      await save(u.id, 'revoked', familyId, future(), 'a', '127.0.0.1');
       await storage.revokeRefreshToken('revoked');
       const sessions = await storage.listActiveSessions(u.id);
       expect(sessions).toHaveLength(1);

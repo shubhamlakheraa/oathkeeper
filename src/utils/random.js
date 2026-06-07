@@ -22,4 +22,11 @@ function sha256(input) {
   return crypto.createHash('sha256').update(input).digest('hex');
 }
 
-module.exports = { generateToken, sha256 };
+function parseTtl(ttl) {
+  const units = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  const match = ttl.match(/^(\d+)([smhd])$/);
+  if (!match) throw new Error(`Invalid TTL format: ${ttl}`);
+  return parseInt(match[1]) * units[match[2]];
+}
+
+module.exports = { generateToken, sha256, parseTtl };

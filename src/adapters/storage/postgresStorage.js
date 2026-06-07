@@ -11,6 +11,23 @@ const ALLOWED_PATCH_FIELDS = new Set([
 const ALLOWED_TOKEN_TYPES = new Set(['email_verification', 'password_reset']);
 
 function createPostgresStorage(pool) {
+  const exec = (client) => client || pool;
+
+  async function withTransaction(fn) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async function createUser({ email, passwordHash }) {
     try {
       const result = await pool.query(
@@ -40,8 +57,8 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function getUserById(id) {
-    const result = await pool.query(
+  async function getUserById(id, { client } = {}) {
+    const result = await exec(client).query(
       `SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1 AND deleted_at IS NULL`,
       [id],
     );
@@ -88,8 +105,11 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function saveRefreshToken(userId, tokenHash, familyId, expiresAt, userAgent, ip) {
-    const result = await pool.query(
+  async function saveRefreshToken(
+    { userId, tokenHash, familyId, expiresAt, userAgent, ip },
+    { client } = {},
+  ) {
+    const result = await exec(client).query(
       `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, user_agent, ip)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *`,
@@ -98,16 +118,17 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function getRefreshToken(tokenHash) {
-    const result = await pool.query(
+  async function getRefreshToken(tokenHash, { client } = {}) {
+    const result = await exec(client).query(
       `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
     return result.rows[0] || null;
   }
 
-  async function rotateRefreshToken({ tokenHash, replacedById }) {
-    const update = await pool.query(
+  async function rotateRefreshToken({ tokenHash, replacedById }, { client } = {}) {
+    const db = exec(client);
+    const update = await db.query(
       `UPDATE refresh_tokens SET revoked_at = now(), replaced_by_id = $1
        WHERE token_hash = $2 AND revoked_at IS NULL
        RETURNING *`,
@@ -115,7 +136,7 @@ function createPostgresStorage(pool) {
     );
     if (update.rows[0]) return { status: 'SUCCESS', token: update.rows[0] };
 
-    const check = await pool.query(
+    const check = await db.query(
       `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
@@ -262,6 +283,7 @@ function createPostgresStorage(pool) {
   }
 
   return {
+    withTransaction,
     createUser,
     getUserByEmail,
     getUserById,
