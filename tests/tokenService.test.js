@@ -260,6 +260,64 @@ describe('tokenService (integration)', () => {
     });
   });
 
+  describe('rotateRefreshToken — soft-deleted user', () => {
+    it('throws InvalidRefreshTokenError (not TypeError) when the user was soft-deleted between rotations', async () => {
+      const user = await makeUser('gone@x.com');
+      const familyId = await newFamilyId();
+      const raw = await service.issueRefreshToken(user, {
+        familyId,
+        userAgent: 'a',
+        ip: '127.0.0.1',
+      });
+
+      await storage.softDeleteUser(user.id);
+
+      await expect(
+        service.rotateRefreshToken(raw, { userAgent: 'a', ip: '127.0.0.1' }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+    });
+  });
+
+  describe('rotateRefreshToken — reuse + family-revoke failure', () => {
+    it('preserves RefreshTokenReuseError when revokeRefreshTokenFamily throws', async () => {
+      const user = await makeUser();
+      const familyId = await newFamilyId();
+      const t1 = await service.issueRefreshToken(user, {
+        familyId,
+        userAgent: 'a',
+        ip: '127.0.0.1',
+      });
+      await service.rotateRefreshToken(t1, { userAgent: 'a', ip: '127.0.0.1' });
+
+      const errors = [];
+      const origConsoleError = console.error;
+      console.error = (...args) => errors.push(args);
+
+      const flakyStorage = {
+        ...storage,
+        revokeRefreshTokenFamily: async () => {
+          throw new Error('pool exhausted');
+        },
+      };
+      const flakyService = createTokenService({
+        storage: flakyStorage,
+        signer,
+        accessTokenTtl: '5m',
+        refreshTokenTtl: '7d',
+      });
+
+      try {
+        await expect(
+          flakyService.rotateRefreshToken(t1, { userAgent: 'a', ip: '127.0.0.1' }),
+        ).rejects.toBeInstanceOf(RefreshTokenReuseError);
+      } finally {
+        console.error = origConsoleError;
+      }
+
+      expect(errors.some((args) => args[0] === 'FAMILY_REVOKE_FAILED')).toBe(true);
+    });
+  });
+
   describe('revokeRefreshToken / revokeAllForUser', () => {
     it('revokeRefreshToken revokes only the matching token', async () => {
       const user = await makeUser();

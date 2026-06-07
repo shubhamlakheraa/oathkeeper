@@ -1,5 +1,3 @@
-// src/errors.js
-
 class AuthError extends Error {
     constructor(message, code) {
       super(message);

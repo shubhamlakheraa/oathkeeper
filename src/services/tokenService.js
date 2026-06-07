@@ -66,6 +66,7 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
         }
 
         const user = await storage.getUserById(prev.user_id, { client });
+        if (!user) throw new InvalidRefreshTokenError();
         return {
           refreshToken: newRawToken,
           accessToken: issueAccessToken(user),
@@ -73,7 +74,14 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
       });
     } catch (err) {
       if (reuseFamilyId) {
-        await storage.revokeRefreshTokenFamily(reuseFamilyId);
+        try {
+          await storage.revokeRefreshTokenFamily(reuseFamilyId);
+        } catch (revokeErr) {
+          console.error('FAMILY_REVOKE_FAILED', {
+            familyId: reuseFamilyId,
+            cause: revokeErr,
+          });
+        }
       }
       throw err;
     }
