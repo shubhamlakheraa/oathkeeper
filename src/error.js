@@ -29,6 +29,13 @@ class AuthError extends Error {
       super(message, 'AUTH.WEAK_PASSWORD');
     }
   }
+
+  class MfaRequiredError extends AuthError {
+    constructor(mfaToken) {
+      super('MFA required', 'AUTH.MFA_REQUIRED');
+      this.mfaToken = mfaToken;
+    }
+  }
   
   module.exports = {
     AuthError,
@@ -36,4 +43,5 @@ class AuthError extends Error {
     RefreshTokenReuseError,
     InvalidCredentialsError,
     WeakPasswordError,
+    MfaRequiredError
   };
