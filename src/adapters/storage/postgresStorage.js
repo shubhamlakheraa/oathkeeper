@@ -28,9 +28,9 @@ function createPostgresStorage(pool) {
     }
   }
 
-  async function createUser({ email, passwordHash }) {
+  async function createUser({ email, passwordHash }, { client } = {}) {
     try {
-      const result = await pool.query(
+      const result = await exec(client).query(
         `
               INSERT INTO users (email, password_hash)
               VALUES ($1, $2)
@@ -272,8 +272,11 @@ function createPostgresStorage(pool) {
     return new Set(result.rows.map((r) => r.name));
   }
 
-  async function logEvent({ userId = null, type, ip = null, userAgent = null, metadata = null }) {
-    const result = await pool.query(
+  async function logEvent(
+    { userId = null, type, ip = null, userAgent = null, metadata = null },
+    { client } = {},
+  ) {
+    const result = await exec(client).query(
       `INSERT INTO auth_events (user_id, type, ip, user_agent, metadata)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
