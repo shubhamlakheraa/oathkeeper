@@ -43,5 +43,5 @@ class AuthError extends Error {
     RefreshTokenReuseError,
     InvalidCredentialsError,
     WeakPasswordError,
-    MfaRequiredError
+    MfaRequiredError,
   };

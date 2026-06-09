@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { WeakPasswordError, InvalidCredentialsError, MfaRequiredError } = require('../error');
 const { COMMON_PASSWORDS } = require('../constants/passwords');
 
@@ -32,12 +33,16 @@ function createAuthService({ storage, hasher, tokenService, signer }) {
   async function login({ email, password, userAgent, ip }) {
     const normalizedEmail = email.toLowerCase().trim();
     const credential = await storage.getCredentialByEmail(normalizedEmail);
-    const storedHash = credential?.password_hash ?? await _dummyHash;
 
-    const passwordMatches = await hasher.verify(password, storedHash);
+    if (!credential) {
+      await hasher.verify(password, await _dummyHash);
+      await storage.logEvent({ userId: null, type: 'login.failure', ip, userAgent });
+      throw new InvalidCredentialsError();
+    }
 
-    if (!passwordMatches || !credential) {
-      await storage.logEvent({ userId: credential?.id ?? null, type: 'login.failure', ip, userAgent });
+    const passwordMatches = await hasher.verify(password, credential.password_hash);
+    if (!passwordMatches) {
+      await storage.logEvent({ userId: credential.id, type: 'login.failure', ip, userAgent });
       throw new InvalidCredentialsError();
     }
 
@@ -48,7 +53,7 @@ function createAuthService({ storage, hasher, tokenService, signer }) {
       throw new MfaRequiredError(mfaToken);
     }
 
-    const familyId = crypto.randomUUID();
+    const familyId = randomUUID();
     const accessToken = tokenService.issueAccessToken(user);
     const refreshToken = await tokenService.issueRefreshToken(user, { familyId, userAgent, ip });
     await storage.updateUser(user.id, { last_login_at: new Date() });
