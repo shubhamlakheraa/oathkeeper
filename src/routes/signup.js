@@ -6,6 +6,13 @@ function createSignupRouter({ authService }) {
   router.post('/signup', async (req, res, next) => {
     try {
       const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res
+          .status(400)
+          .json({ error: { code: 'VALIDATION_ERROR', message: 'email and password are required' } });
+      }
+
       const result = await authService.signup({
         email,
         password,

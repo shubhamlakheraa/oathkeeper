@@ -129,6 +129,7 @@ describe('POST /auth/login — header mode', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('AUTH.MFA_REQUIRED');
+    expect(res.body.error.mfaToken).toBe('mfa.token.here');
   });
 });
 

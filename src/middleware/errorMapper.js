@@ -1,4 +1,4 @@
-const { AuthError } = require('../error');
+const { AuthError, MfaRequiredError } = require('../error');
 
 const HTTP_STATUS = {
   'AUTH.INVALID_CREDENTIALS': 401,
@@ -9,6 +9,12 @@ const HTTP_STATUS = {
 };
 
 function errorMapper(err, _req, res, _next) {
+  if (err instanceof MfaRequiredError) {
+    return res.status(403).json({
+      error: { code: err.code, message: err.message, mfaToken: err.mfaToken },
+    });
+  }
+
   if (err instanceof AuthError) {
     const status = HTTP_STATUS[err.code] ?? 400;
     return res.status(status).json({ error: { code: err.code, message: err.message } });

@@ -1,7 +1,9 @@
 const express = require('express');
+const cookieParser = require('cookie-parser');
 
 function createLogoutRouter({ authService, signer, cookieMode, cookieOptions = {} }) {
   const router = express.Router();
+  router.use(cookieParser());
 
   router.post('/logout', async (req, res, next) => {
     try {
