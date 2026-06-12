@@ -119,6 +119,22 @@ describe('authenticate middleware (integration)', () => {
     expect(res.body.error.code).toBe('AUTH.USER_NOT_FOUND');
   });
 
+  it('MFA challenge token is rejected — cannot be used as access token', async () => {
+    const user = await makeUser('mfa@x.com');
+    const mfaToken = signer.sign(
+      { sub: user.id, purpose: 'mfa_challenge' },
+      { expiresIn: '5m' },
+    );
+    const app = buildApp(authenticate);
+
+    const res = await request(app)
+      .get('/protected')
+      .set('Authorization', `Bearer ${mfaToken}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('AUTH.INVALID_TOKEN');
+  });
+
   it('verify runs before DB lookup — wrong signature never hits the DB', async () => {
     const otherSigner = createJwtSigner({ secret: 'different-secret' });
     const user = await makeUser('spy@x.com');

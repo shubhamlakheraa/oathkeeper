@@ -36,7 +36,7 @@ class MfaRequiredError extends AuthError {
     this.mfaToken = mfaToken;
   }
 }
-// src/errors.js
+
 class InvalidTokenError extends AuthError {
   constructor() {
     super('Invalid token', 'AUTH.INVALID_TOKEN');

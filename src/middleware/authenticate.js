@@ -1,17 +1,14 @@
-// src/middleware/authenticate.js
 const { TokenExpiredError, UserNotFoundError, InvalidTokenError } = require('../error');
 
 function createAuthenticate({ signer, storage }) {
   return async function authenticate(req, res, next) {
     try {
-      // 1. extract token
       const header = req.headers.authorization;
       if (!header?.startsWith('Bearer ')) {
         return next(new InvalidTokenError());
       }
       const rawJwt = header.slice(7);
 
-      // 2. verify signature + expiry
       let payload;
       try {
         payload = signer.verify(rawJwt);
@@ -20,14 +17,17 @@ function createAuthenticate({ signer, storage }) {
         return next(new InvalidTokenError());
       }
 
-      // 3. look up user + permissions in DB
+      // scoped tokens (e.g. mfa_challenge) must never be accepted as access tokens
+      if (payload.purpose) return next(new InvalidTokenError());
+
       const [user, permissions] = await Promise.all([
         storage.getUserById(payload.sub),
         storage.getUserPermissions(payload.sub),
       ]);
       if (!user) return next(new UserNotFoundError());
 
-      // 4. attach to request
+      // permissions is a Set<string> — use req.user.permissions.has('name') for checks.
+      // Not JSON-serializable directly; spread [...req.user.permissions] before res.json.
       req.user = { ...user, permissions };
       req.auth = {
         tokenPayload: payload,
