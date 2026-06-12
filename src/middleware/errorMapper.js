@@ -6,6 +6,9 @@ const HTTP_STATUS = {
   'AUTH.REFRESH_REUSE_DETECTED': 401,
   'AUTH.MFA_REQUIRED': 403,
   'AUTH.WEAK_PASSWORD': 422,
+  'AUTH.INVALID_TOKEN': 401,
+  'AUTH.TOKEN_EXPIRED': 401,
+  'AUTH.USER_NOT_FOUND': 401,
 };
 
 function errorMapper(err, _req, res, _next) {
