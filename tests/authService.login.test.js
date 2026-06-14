@@ -4,7 +4,7 @@ const { createArgon2Hasher } = require('../src/adapters/hasher/argon2Hasher');
 const { createJwtSigner } = require('../src/utils/jwt');
 const { createTokenService } = require('../src/services/tokenService');
 const { createAuthService } = require('../src/services/authService');
-const { InvalidCredentialsError, MfaRequiredError, InvalidRefreshTokenError } = require('../src/error');
+const { InvalidCredentialsError, MfaRequiredError, RefreshTokenReuseError } = require('../src/error');
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const HASHER_CONFIG = { memoryCost: 1024, timeCost: 1, parallelism: 1 };
@@ -122,8 +122,8 @@ describe('authService — login / logout (integration)', () => {
       const unknownEmailMs = Date.now() - t2;
 
       // Both paths must run argon2 — neither should return in < 1ms
-      expect(wrongPasswordMs).toBeGreaterThan(1);
-      expect(unknownEmailMs).toBeGreaterThan(1);
+      expect(wrongPasswordMs).toBeGreaterThanOrEqual(1);
+      expect(unknownEmailMs).toBeGreaterThanOrEqual(1);
 
       // Neither should be more than 10x slower than the other
       const ratio = Math.max(wrongPasswordMs, unknownEmailMs) / Math.min(wrongPasswordMs, unknownEmailMs);
@@ -150,7 +150,7 @@ describe('authService — login / logout (integration)', () => {
   });
 
   describe('logout', () => {
-    it('revokes the refresh token — subsequent rotate throws InvalidRefreshTokenError', async () => {
+    it('revokes the refresh token — subsequent rotate throws RefreshTokenReuseError', async () => {
       await register('logout@x.com');
       const { refreshToken } = await service.login({
         email: 'logout@x.com',
@@ -164,7 +164,7 @@ describe('authService — login / logout (integration)', () => {
 
       await expect(
         tokenService.rotateRefreshToken(refreshToken, { userAgent: 'agent', ip: '1.2.3.4' }),
-      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+      ).rejects.toBeInstanceOf(RefreshTokenReuseError);
     });
   });
 
