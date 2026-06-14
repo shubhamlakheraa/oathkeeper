@@ -87,7 +87,7 @@ function createPostgresStorage(pool) {
     ]);
   }
 
-  async function updateUser(id, patches) {
+  async function updateUser(id, patches, { client } = {}) {
     const fields = Object.keys(patches);
     if (fields.length === 0) return getUserById(id);
 
@@ -98,7 +98,7 @@ function createPostgresStorage(pool) {
     const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
     const values = fields.map((f) => patches[f]);
 
-    const result = await pool.query(
+    const result = await exec(client).query(
       `UPDATE users SET ${setClauses}, updated_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING ${PUBLIC_USER_COLUMNS}`,
       [id, ...values],
     );
@@ -197,9 +197,9 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function consumeToken(tokenHash, type) {
+  async function consumeToken(tokenHash, type, { client } = {}) {
     assertAllowedTokenType(type);
-    const result = await pool.query(
+    const result = await exec(client).query(
       `UPDATE ${type}_tokens
        SET used_at = now()
        WHERE token_hash = $1

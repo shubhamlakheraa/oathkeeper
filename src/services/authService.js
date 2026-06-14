@@ -1,6 +1,6 @@
 const { randomUUID } = require('crypto');
 const { WeakPasswordError, InvalidCredentialsError, MfaRequiredError, InvalidTokenError } = require('../error');
-const { COMMON_PASSWORDS, TTL_MS } = require('../constants/passwords');
+const { COMMON_PASSWORDS, EMAIL_VERIFICATION_TTL_MS } = require('../constants/passwords');
 const { generateToken, sha256 } = require('../utils/random');
 
 function createAuthService({ storage, hasher, tokenService, signer, mailer, config }) {
@@ -70,9 +70,9 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
   async function requestEmailVerification(user) {
     const rawToken = generateToken();
     const tokenHash = sha256(rawToken);
-    const expiresAt = new Date(Date.now() + TTL_MS);
+    const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
     await storage.saveToken(user.id, tokenHash, expiresAt, 'email_verification');
-    const verifyUrl = `${config.baseUrl}/auth/email/verify/confirm?token=${rawToken}`;
+    const verifyUrl = `${config.baseUrl}/auth/email/verify/confirm?token=${encodeURIComponent(rawToken)}`;
     await mailer.sendMail({
       to: user.email,
       subject: 'Verify your email',
@@ -83,10 +83,12 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
 
   async function confirmEmailVerification(rawToken) {
     const tokenHash = sha256(rawToken);
-    const tokenRow = await storage.consumeToken(tokenHash, 'email_verification');
-    if (!tokenRow) throw new InvalidTokenError();
-    await storage.updateUser(tokenRow.user_id, { email_verified: true });
-    await storage.logEvent({ userId: tokenRow.user_id, type: 'email_verification.confirmed' });
+    await storage.withTransaction(async (client) => {
+      const tokenRow = await storage.consumeToken(tokenHash, 'email_verification', { client });
+      if (!tokenRow) throw new InvalidTokenError();
+      await storage.updateUser(tokenRow.user_id, { email_verified: true }, { client });
+      await storage.logEvent({ userId: tokenRow.user_id, type: 'email_verification.confirmed' }, { client });
+    });
   }
 
   return {
