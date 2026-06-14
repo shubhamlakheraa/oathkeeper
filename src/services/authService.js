@@ -1,8 +1,9 @@
 const { randomUUID } = require('crypto');
-const { WeakPasswordError, InvalidCredentialsError, MfaRequiredError } = require('../error');
-const { COMMON_PASSWORDS } = require('../constants/passwords');
+const { WeakPasswordError, InvalidCredentialsError, MfaRequiredError, InvalidTokenError } = require('../error');
+const { COMMON_PASSWORDS, EMAIL_VERIFICATION_TTL_MS } = require('../constants/passwords');
+const { generateToken, sha256 } = require('../utils/random');
 
-function createAuthService({ storage, hasher, tokenService, signer }) {
+function createAuthService({ storage, hasher, tokenService, signer, mailer, config }) {
   const _dummyHash = hasher.hash('__dummy_password__');
 
   async function signup({ email, password, ip, userAgent }) {
@@ -66,10 +67,36 @@ function createAuthService({ storage, hasher, tokenService, signer }) {
     await storage.logEvent({ userId, type: 'logout', ip, userAgent });
   }
 
+  async function requestEmailVerification(user) {
+    const rawToken = generateToken();
+    const tokenHash = sha256(rawToken);
+    const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
+    await storage.saveToken(user.id, tokenHash, expiresAt, 'email_verification');
+    const verifyUrl = `${config.baseUrl}/auth/email/verify/confirm?token=${encodeURIComponent(rawToken)}`;
+    await mailer.sendMail({
+      to: user.email,
+      subject: 'Verify your email',
+      html: `Click to verify: <a href="${verifyUrl}">${verifyUrl}</a>`,
+    });
+    await storage.logEvent({ userId: user.id, type: 'email_verification.requested' });
+  }
+
+  async function confirmEmailVerification(rawToken) {
+    const tokenHash = sha256(rawToken);
+    await storage.withTransaction(async (client) => {
+      const tokenRow = await storage.consumeToken(tokenHash, 'email_verification', { client });
+      if (!tokenRow) throw new InvalidTokenError();
+      await storage.updateUser(tokenRow.user_id, { email_verified: true }, { client });
+      await storage.logEvent({ userId: tokenRow.user_id, type: 'email_verification.confirmed' }, { client });
+    });
+  }
+
   return {
     signup,
     login,
     logout,
+    requestEmailVerification,
+    confirmEmailVerification
   };
 }
 

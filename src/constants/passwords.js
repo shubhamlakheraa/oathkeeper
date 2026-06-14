@@ -6,4 +6,6 @@ const COMMON_PASSWORDS = new Set([
   'iloveyou123456',
 ]);
 
-module.exports = { COMMON_PASSWORDS };
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+module.exports = { COMMON_PASSWORDS, EMAIL_VERIFICATION_TTL_MS };
