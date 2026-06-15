@@ -55,6 +55,12 @@ class UserNotFoundError extends AuthError {
   }
 }
 
+class InvalidOrExpiredTokenError extends AuthError {
+  constructor() {
+    super('Invalid or expired token', 'AUTH.INVALID_OR_EXPIRED_TOKEN');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -65,4 +71,5 @@ module.exports = {
   InvalidTokenError,
   TokenExpiredError,
   UserNotFoundError,
+  InvalidOrExpiredTokenError
 };

@@ -8,10 +8,12 @@ const {
   WeakPasswordError,
 } = require('../src/error');
 
+const mockAuthenticate = (req, _res, next) => { req.user = { id: 'uuid-1' }; next(); };
+
 function buildApp({ authService, signer = null, cookieMode = false, cookieOptions = {} }) {
   const app = express();
   app.use(express.json());
-  app.use('/auth', createAuthRouter({ authService, signer, cookieMode, cookieOptions }));
+  app.use('/auth', createAuthRouter({ authService, signer, authenticate: mockAuthenticate, cookieMode, cookieOptions }));
   app.use(errorMapper);
   return app;
 }

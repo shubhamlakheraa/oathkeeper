@@ -92,8 +92,8 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
     return storage.revokeRefreshToken(tokenHash);
   }
 
-  function revokeAllForUser(userId) {
-    return storage.revokeAllRefreshTokensForUser(userId);
+  function revokeAllForUser(userId, { exceptTokenId } = {}) {
+    return storage.revokeAllRefreshTokensForUser(userId, { exceptTokenId });
   }
 
   return {
