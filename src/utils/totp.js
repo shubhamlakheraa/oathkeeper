@@ -37,7 +37,8 @@ function verifyCode(secret, submittedCode, { window = 1, replayStore }) {
     const expectedCode = generateCode(secret, time);
 
     if (submittedCode === expectedCode) {
-      const key = `${secret}:${Math.floor(time / 1000 / STEP_SECONDS)}`;
+      const secretFingerprint = crypto.createHash('sha256').update(secret).digest('hex').slice(0, 16);
+      const key = `${secretFingerprint}:${Math.floor(time / 1000 / STEP_SECONDS)}`;
 
       if (replayStore.has(key)) {
         return { valid: false, usedTime: null };
