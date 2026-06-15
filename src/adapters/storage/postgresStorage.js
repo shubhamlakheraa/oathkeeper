@@ -163,7 +163,6 @@ function createPostgresStorage(pool) {
     return result.rowCount;
   }
 
-  // storage
   async function revokeAllRefreshTokensForUser(userId, { exceptTokenId } = {}) {
     const query = exceptTokenId
       ? `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL`

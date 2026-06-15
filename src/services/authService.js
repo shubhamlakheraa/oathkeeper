@@ -3,7 +3,6 @@ const {
   WeakPasswordError,
   InvalidCredentialsError,
   MfaRequiredError,
-  InvalidTokenError,
   InvalidOrExpiredTokenError,
 } = require('../error');
 const {
@@ -95,7 +94,7 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
     const tokenHash = sha256(rawToken);
     await storage.withTransaction(async (client) => {
       const tokenRow = await storage.consumeToken(tokenHash, 'email_verification', { client });
-      if (!tokenRow) throw new InvalidTokenError();
+      if (!tokenRow) throw new InvalidOrExpiredTokenError();
       await storage.updateUser(tokenRow.user_id, { email_verified: true }, { client });
       await storage.logEvent(
         { userId: tokenRow.user_id, type: 'email_verification.confirmed' },
@@ -152,7 +151,8 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
 
     const currentTokenHash = currentRefreshToken ? sha256(currentRefreshToken) : null;
     const currentToken = currentTokenHash ? await storage.getRefreshToken(currentTokenHash) : null;
-    await tokenService.revokeAllForUser(user.id, { exceptTokenId: currentToken?.id });
+    const ownToken = currentToken?.user_id === user.id ? currentToken : null;
+    await tokenService.revokeAllForUser(user.id, { exceptTokenId: ownToken?.id });
 
     await storage.logEvent({ userId: user.id, type: 'password.changed' });
 
