@@ -87,6 +87,13 @@ function createPostgresStorage(pool) {
     ]);
   }
 
+  async function updatePassword(userId, passwordHash, { client } = {}) {
+    await exec(client).query(
+      `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND deleted_at IS NULL`,
+      [passwordHash, userId],
+    );
+  }
+
   async function updateUser(id, patches, { client } = {}) {
     const fields = Object.keys(patches);
     if (fields.length === 0) return getUserById(id);
@@ -119,10 +126,9 @@ function createPostgresStorage(pool) {
   }
 
   async function getRefreshToken(tokenHash, { client } = {}) {
-    const result = await exec(client).query(
-      `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
-      [tokenHash],
-    );
+    const result = await exec(client).query(`SELECT * FROM refresh_tokens WHERE token_hash = $1`, [
+      tokenHash,
+    ]);
     return result.rows[0] || null;
   }
 
@@ -136,10 +142,7 @@ function createPostgresStorage(pool) {
     );
     if (update.rows[0]) return { status: 'SUCCESS', token: update.rows[0] };
 
-    const check = await db.query(
-      `SELECT * FROM refresh_tokens WHERE token_hash = $1`,
-      [tokenHash],
-    );
+    const check = await db.query(`SELECT * FROM refresh_tokens WHERE token_hash = $1`, [tokenHash]);
     if (!check.rows[0]) return { status: 'NOT_FOUND', token: null };
     return { status: 'ALREADY_REVOKED', token: check.rows[0] };
   }
@@ -160,11 +163,12 @@ function createPostgresStorage(pool) {
     return result.rowCount;
   }
 
-  async function revokeAllRefreshTokensForUser(userId) {
-    const result = await pool.query(
-      `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
-      [userId],
-    );
+  async function revokeAllRefreshTokensForUser(userId, { exceptTokenId } = {}) {
+    const query = exceptTokenId
+      ? `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND id != $2 AND revoked_at IS NULL`
+      : `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`;
+    const params = exceptTokenId ? [userId, exceptTokenId] : [userId];
+    const result = await pool.query(query, params);
     return result.rowCount;
   }
   async function listActiveSessions(userId) {
@@ -242,10 +246,10 @@ function createPostgresStorage(pool) {
   }
 
   async function removeRole(userId, roleId) {
-    const result = await pool.query(
-      `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`,
-      [userId, roleId],
-    );
+    const result = await pool.query(`DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`, [
+      userId,
+      roleId,
+    ]);
     return result.rowCount > 0;
   }
 
@@ -294,6 +298,7 @@ function createPostgresStorage(pool) {
     getMfaSecret,
     softDeleteUser,
     updateUser,
+    updatePassword,
     saveRefreshToken,
     getRefreshToken,
     rotateRefreshToken,

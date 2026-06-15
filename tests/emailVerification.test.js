@@ -5,7 +5,7 @@ const { createJwtSigner } = require('../src/utils/jwt');
 const { createTokenService } = require('../src/services/tokenService');
 const { createAuthService } = require('../src/services/authService');
 const { sha256 } = require('../src/utils/random');
-const { InvalidTokenError } = require('../src/error');
+const { InvalidOrExpiredTokenError } = require('../src/error');
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -136,17 +136,17 @@ describe('email verification (integration)', () => {
       expect(row).not.toBeNull();
     });
 
-    it('reuse of already-confirmed token → InvalidTokenError', async () => {
+    it('reuse of already-confirmed token → InvalidOrExpiredTokenError', async () => {
       const user = await makeUser('reuse@x.com');
       await service.requestEmailVerification(user);
       const rawToken = extractToken(sentMails[0].html);
 
       await service.confirmEmailVerification(rawToken);
 
-      await expect(service.confirmEmailVerification(rawToken)).rejects.toBeInstanceOf(InvalidTokenError);
+      await expect(service.confirmEmailVerification(rawToken)).rejects.toBeInstanceOf(InvalidOrExpiredTokenError);
     });
 
-    it('expired token → InvalidTokenError', async () => {
+    it('expired token → InvalidOrExpiredTokenError', async () => {
       const user = await makeUser('expired@x.com');
       await service.requestEmailVerification(user);
       const rawToken = extractToken(sentMails[0].html);
@@ -157,13 +157,13 @@ describe('email verification (integration)', () => {
         [sha256(rawToken)],
       );
 
-      await expect(service.confirmEmailVerification(rawToken)).rejects.toBeInstanceOf(InvalidTokenError);
+      await expect(service.confirmEmailVerification(rawToken)).rejects.toBeInstanceOf(InvalidOrExpiredTokenError);
     });
 
-    it('unknown token → InvalidTokenError', async () => {
+    it('unknown token → InvalidOrExpiredTokenError', async () => {
       await expect(
         service.confirmEmailVerification('completely-unknown-token'),
-      ).rejects.toBeInstanceOf(InvalidTokenError);
+      ).rejects.toBeInstanceOf(InvalidOrExpiredTokenError);
     });
   });
 });
