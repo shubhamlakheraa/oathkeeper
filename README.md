@@ -19,9 +19,9 @@ Raw `pg`, no ORM. CommonJS. Security defaults that are not optional.
 | Core AuthN services | T08–T10 — token service, signup, login/logout | ✅ done |
 | HTTP layer | T11–T12 — signup/login/logout routes, `authenticate` middleware | ✅ done |
 | Refresh endpoint | T13 — `POST /refresh` route over rotation logic | ✅ done |
-| Email flows | T14–T16 — mail adapter, email verification, password reset/change | 🚧 in progress |
-| MFA | T17–T18 — TOTP utility, enroll/confirm/disable, recovery codes | ⬜ planned |
-| Authorization | T19 — RBAC service, `requirePermission`, policy registry, `can()` | ⬜ planned |
+| Email flows | T14–T16 — mail adapter, email verification, password reset/change | ✅ done |
+| MFA | T17–T18 — TOTP utility, enroll/confirm/disable, recovery codes | ✅ done |
+| Authorization | T19 — RBAC service, `requirePermission`, policy registry, `can()` | 🚧 in progress |
 | Hardening | T20–T21 — rate limiting, CSRF, audit integration, config validation | ⬜ planned |
 | Packaging | T22 — `createAuth` factory, examples, docs | ⬜ planned |
 
