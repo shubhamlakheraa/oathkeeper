@@ -61,6 +61,12 @@ class InvalidOrExpiredTokenError extends AuthError {
   }
 }
 
+class InvalidMfaCodeError extends AuthError {
+  constructor() {
+    super('Invalid MFA code', 'AUTH.INVALID_MFA_CODE');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -71,5 +77,6 @@ module.exports = {
   InvalidTokenError,
   TokenExpiredError,
   UserNotFoundError,
-  InvalidOrExpiredTokenError
+  InvalidOrExpiredTokenError,
+  InvalidMfaCodeError
 };

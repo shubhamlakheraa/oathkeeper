@@ -4,6 +4,8 @@ const {
   InvalidCredentialsError,
   MfaRequiredError,
   InvalidOrExpiredTokenError,
+  InvalidTokenError,
+  InvalidMfaCodeError,
 } = require('../error');
 const {
   COMMON_PASSWORDS,
@@ -12,7 +14,7 @@ const {
 } = require('../constants/passwords');
 const { generateToken, sha256 } = require('../utils/random');
 
-function createAuthService({ storage, hasher, tokenService, signer, mailer, config }) {
+function createAuthService({ storage, hasher, tokenService, signer, mailer, config, mfaService }) {
   const _dummyHash = hasher.hash('__dummy_password__');
 
   async function signup({ email, password, ip, userAgent }) {
@@ -159,6 +161,22 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
     return { message: 'Password changed.' };
   }
 
+  async function completeMfaLogin({ mfaToken, code, userAgent, ip }) {
+    const payload = signer.verify(mfaToken);
+    if (payload.purpose !== 'mfa_challenge') throw new InvalidTokenError();
+
+    const valid = await mfaService.verifyMfaForLogin(payload.sub, code);
+    if (!valid) throw new InvalidMfaCodeError();
+    const user = await storage.getUserById(payload.sub);
+    const familyId = randomUUID();
+    const accessToken = tokenService.issueAccessToken(user);
+    const refreshToken = await tokenService.issueRefreshToken(user, { familyId, userAgent, ip });
+
+    await storage.logEvent({ userId: user.id, type: 'login.mfa_success', ip, userAgent });
+
+    return { user, accessToken, refreshToken };
+  }
+
   return {
     signup,
     login,
@@ -167,7 +185,8 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
     confirmEmailVerification,
     requestPasswordReset,
     confirmPasswordReset,
-    changePassword
+    changePassword,
+    completeMfaLogin
   };
 }
 

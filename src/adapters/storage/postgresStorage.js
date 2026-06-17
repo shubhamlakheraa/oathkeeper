@@ -288,6 +288,17 @@ function createPostgresStorage(pool) {
     );
     return result.rows[0];
   }
+  async function getMfaRecoveryCodes(userId) {
+    const result = await pool.query(
+      `SELECT id, code_hash FROM mfa_recovery_codes WHERE user_id = $1 AND used_at IS NULL`,
+      [userId],
+    );
+    return result.rows;
+  }
+
+  async function deleteMfaRecoveryCodes(userId) {
+    await pool.query(`DELETE FROM mfa_recovery_codes WHERE user_id = $1`, [userId]);
+  }
 
   return {
     withTransaction,
@@ -309,12 +320,14 @@ function createPostgresStorage(pool) {
     consumeToken,
     saveToken,
     saveMfaRecoveryCodes,
+    getMfaRecoveryCodes,
     consumeMfaRecoveryCode,
     assignRole,
     removeRole,
     getRolesForUser,
     getUserPermissions,
     logEvent,
+    deleteMfaRecoveryCodes
   };
 }
 
