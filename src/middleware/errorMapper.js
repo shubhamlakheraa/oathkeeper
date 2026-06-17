@@ -10,6 +10,8 @@ const HTTP_STATUS = {
   'AUTH.TOKEN_EXPIRED': 401,
   'AUTH.USER_NOT_FOUND': 401,
   'AUTH.INVALID_OR_EXPIRED_TOKEN': 401,
+  'AUTH.INVALID_MFA_CODE': 401,
+  'AUTH.MFA_ALREADY_ENABLED': 409,
 };
 
 function errorMapper(err, _req, res, _next) {
