@@ -1,9 +1,10 @@
 const crypto = require('crypto');
-const { InvalidMfaCodeError, InvalidCredentialsError } = require('../error');
+const { InvalidMfaCodeError, InvalidCredentialsError, MfaAlreadyEnabledError } = require('../error');
 const { generateSecret, buildOtpAuthUri, verifyCode } = require('../utils/totp');
 
 function createMfaService({ storage, hasher, issuer, replayStore }) {
   async function beginEnrollment(user) {
+    if (user.mfa_enabled) throw new MfaAlreadyEnabledError();
     const secret = generateSecret();
     const uri = buildOtpAuthUri({ secret, accountName: user.email, issuer });
     await storage.updateUser(user.id, { mfa_secret: secret, mfa_enabled: false });
@@ -19,10 +20,12 @@ function createMfaService({ storage, hasher, issuer, replayStore }) {
 
     const plaintextCodes = Array.from({ length: 10 }, () => crypto.randomBytes(5).toString('hex'));
     const hashedCodes = await Promise.all(plaintextCodes.map((c) => hasher.hash(c)));
-    await storage.saveMfaRecoveryCodes(user.id, hashedCodes);
 
-    await storage.updateUser(user.id, { mfa_enabled: true });
-    await storage.logEvent({ userId: user.id, type: 'mfa.enabled' });
+    await storage.withTransaction(async (client) => {
+      await storage.saveMfaRecoveryCodes(user.id, hashedCodes, { client });
+      await storage.updateUser(user.id, { mfa_enabled: true }, { client });
+      await storage.logEvent({ userId: user.id, type: 'mfa.enabled' }, { client });
+    });
 
     return { recoveryCodes: plaintextCodes };
   }

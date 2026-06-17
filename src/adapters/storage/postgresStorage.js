@@ -215,8 +215,8 @@ function createPostgresStorage(pool) {
     return result.rows[0] || null;
   }
 
-  async function saveMfaRecoveryCodes(userId, codeHashes) {
-    const result = await pool.query(
+  async function saveMfaRecoveryCodes(userId, codeHashes, { client } = {}) {
+    const result = await exec(client).query(
       `INSERT INTO mfa_recovery_codes (user_id, code_hash)
        SELECT $1, UNNEST($2::text[])
        RETURNING *`,

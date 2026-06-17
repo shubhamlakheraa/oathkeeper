@@ -67,6 +67,12 @@ class InvalidMfaCodeError extends AuthError {
   }
 }
 
+class MfaAlreadyEnabledError extends AuthError {
+  constructor() {
+    super('MFA is already enabled', 'AUTH.MFA_ALREADY_ENABLED');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -78,5 +84,6 @@ module.exports = {
   TokenExpiredError,
   UserNotFoundError,
   InvalidOrExpiredTokenError,
-  InvalidMfaCodeError
+  InvalidMfaCodeError,
+  MfaAlreadyEnabledError,
 };

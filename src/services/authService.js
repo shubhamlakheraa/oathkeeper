@@ -162,12 +162,18 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
   }
 
   async function completeMfaLogin({ mfaToken, code, userAgent, ip }) {
-    const payload = signer.verify(mfaToken);
+    let payload;
+    try {
+      payload = signer.verify(mfaToken);
+    } catch {
+      throw new InvalidTokenError();
+    }
     if (payload.purpose !== 'mfa_challenge') throw new InvalidTokenError();
 
     const valid = await mfaService.verifyMfaForLogin(payload.sub, code);
     if (!valid) throw new InvalidMfaCodeError();
     const user = await storage.getUserById(payload.sub);
+    if (!user) throw new InvalidTokenError();
     const familyId = randomUUID();
     const accessToken = tokenService.issueAccessToken(user);
     const refreshToken = await tokenService.issueRefreshToken(user, { familyId, userAgent, ip });

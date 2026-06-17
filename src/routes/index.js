@@ -13,7 +13,7 @@ function createAuthRouter({ authService, tokenService, mfaService, signer, authe
   router.use(createLogoutRouter({ authService, signer, cookieMode, cookieOptions }));
   router.use(createRefreshRouter({ tokenService, cookieMode, cookieOptions }));
   router.use(createPasswordRouter({ authService, authenticate, cookieMode }));
-  router.use(createMfaRouter({ authService, mfaService, authenticate }));
+  router.use(createMfaRouter({ authService, mfaService, authenticate, cookieMode, cookieOptions }));
   return router;
 }
 
