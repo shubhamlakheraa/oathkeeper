@@ -1,3 +1,5 @@
+const { RoleAlreadyExistsError } = require('../../error');
+
 const PUBLIC_USER_COLUMNS =
   'id, email, email_verified, mfa_enabled, last_login_at, created_at, updated_at, deleted_at';
 
@@ -301,8 +303,13 @@ function createPostgresStorage(pool) {
   }
 
   async function createRole(name) {
-    const result = await pool.query(`INSERT INTO roles (name) VALUES ($1) RETURNING *`, [name]);
-    return result.rows[0];
+    try {
+      const result = await pool.query(`INSERT INTO roles (name) VALUES ($1) RETURNING *`, [name]);
+      return result.rows[0];
+    } catch (err) {
+      if (err.code === '23505') throw new RoleAlreadyExistsError();
+      throw err;
+    }
   }
 
   async function deleteRole(roleId) {
