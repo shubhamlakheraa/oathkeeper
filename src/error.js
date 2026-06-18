@@ -73,6 +73,12 @@ class MfaAlreadyEnabledError extends AuthError {
   }
 }
 
+class ForbiddenError extends AuthError {
+  constructor() {
+    super('Forbidden', 'AUTH.FORBIDDEN');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -86,4 +92,5 @@ module.exports = {
   InvalidOrExpiredTokenError,
   InvalidMfaCodeError,
   MfaAlreadyEnabledError,
+  ForbiddenError
 };
