@@ -1,3 +1,5 @@
+const { RoleAlreadyExistsError } = require('../../error');
+
 const PUBLIC_USER_COLUMNS =
   'id, email, email_verified, mfa_enabled, last_login_at, created_at, updated_at, deleted_at';
 
@@ -300,6 +302,44 @@ function createPostgresStorage(pool) {
     await pool.query(`DELETE FROM mfa_recovery_codes WHERE user_id = $1`, [userId]);
   }
 
+  async function createRole(name) {
+    try {
+      const result = await pool.query(`INSERT INTO roles (name) VALUES ($1) RETURNING *`, [name]);
+      return result.rows[0];
+    } catch (err) {
+      if (err.code === '23505') throw new RoleAlreadyExistsError();
+      throw err;
+    }
+  }
+
+  async function deleteRole(roleId) {
+    await pool.query(`DELETE FROM roles WHERE id = $1`, [roleId]);
+  }
+
+  async function addPermissionToRole(roleId, permissionName) {
+    const perm = await pool.query(
+      `INSERT INTO permissions (name) VALUES ($1) 
+       ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name 
+       RETURNING *`,
+      [permissionName],
+    );
+    const permissionId = perm.rows[0].id;
+
+    await pool.query(
+      `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [roleId, permissionId],
+    );
+  }
+
+  async function removePermissionFromRole(roleId, permissionName) {
+    await pool.query(
+      `DELETE FROM role_permissions 
+       WHERE role_id = $1 AND permission_id = (SELECT id FROM permissions WHERE name = $2)`,
+      [roleId, permissionName],
+    );
+  }
+
   return {
     withTransaction,
     createUser,
@@ -327,7 +367,11 @@ function createPostgresStorage(pool) {
     getRolesForUser,
     getUserPermissions,
     logEvent,
-    deleteMfaRecoveryCodes
+    deleteMfaRecoveryCodes,
+    createRole,
+    deleteRole,
+    addPermissionToRole,
+    removePermissionFromRole,
   };
 }
 

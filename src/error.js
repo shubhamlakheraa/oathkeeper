@@ -73,6 +73,18 @@ class MfaAlreadyEnabledError extends AuthError {
   }
 }
 
+class ForbiddenError extends AuthError {
+  constructor() {
+    super('Forbidden', 'AUTH.FORBIDDEN');
+  }
+}
+
+class RoleAlreadyExistsError extends AuthError {
+  constructor() {
+    super('Role already exists', 'AUTH.ROLE_EXISTS');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -86,4 +98,6 @@ module.exports = {
   InvalidOrExpiredTokenError,
   InvalidMfaCodeError,
   MfaAlreadyEnabledError,
+  ForbiddenError,
+  RoleAlreadyExistsError,
 };
