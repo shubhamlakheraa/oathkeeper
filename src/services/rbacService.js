@@ -38,7 +38,7 @@ function createRbacService({ storage, policies = {} }) {
     if (!permissions.has(action)) return false;
 
     const policy = policies[action];
-    if (policy && resource !== null) {
+    if (policy && resource !== null && resource !== undefined) {
       return Boolean(await policy(user, resource));
     }
 

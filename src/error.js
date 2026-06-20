@@ -85,6 +85,18 @@ class RoleAlreadyExistsError extends AuthError {
   }
 }
 
+class RateLimitedError extends AuthError {
+  constructor() {
+    super('Too many requests', 'AUTH.RATE_LIMITED');
+  }
+}
+
+class CsrfError extends AuthError {
+  constructor() {
+    super('Invalid CSRF token', 'AUTH.CSRF_INVALID');
+  }
+}
+
 module.exports = {
   AuthError,
   InvalidRefreshTokenError,
@@ -100,4 +112,6 @@ module.exports = {
   MfaAlreadyEnabledError,
   ForbiddenError,
   RoleAlreadyExistsError,
+  RateLimitedError,
+  CsrfError
 };
