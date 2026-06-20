@@ -1,55 +1,52 @@
 # oathkeeper
 
-A from-scratch authentication & authorization library for Node.js + Express + PostgreSQL.
+Production-grade authentication and authorization library for Node.js + Express + PostgreSQL.
 
-Raw `pg`, no ORM. CommonJS. Security defaults that are not optional.
+Raw `pg`, no ORM. CommonJS. Every security default is enforced, not optional.
 
-> **Why this exists.** `oathkeeper` is being built as a learning project — the goal is to understand *the why* behind every auth best practice by implementing it from first principles, rather than to ship yet another package you should depend on in production. Every "paranoid" decision in this codebase (the dummy hash on failed login, the hardcoded JWT algorithm, the atomic one-time-token consume, the field whitelist on updates) maps to a specific, named, exploited attack. The README documents both the API and the reasoning.
+> **Why this exists.** oathkeeper was built as a learning project — the goal is to understand *the why* behind every auth best practice by implementing it from first principles. Every decision in this codebase (the dummy hash on unknown email, the algorithm-pinned JWT verify, the atomic one-time-token consume, the field whitelist on DB updates) maps to a specific, named, exploited attack. The code and docs explain the reasoning, not just the API.
 
 ---
 
-## Status
+## ⚠️ Current Implementation Notice — In-Memory State
 
-**Work in progress — roughly T12 of 22.** The public `createAuth()` factory and several flows below are still being implemented. This README documents the *intended* surface; sections covering unbuilt features are marked **(planned)**.
+**Two security-critical components run entirely in process memory:**
 
-| Phase | Tasks | State |
-|---|---|---|
-| Setup & foundations | T01–T05 — skeleton, migrations, crypto utils, password hasher, JWT util | ✅ done |
-| Storage layer | T06–T07 — Postgres users + tokens/RBAC/audit | ✅ done |
-| Core AuthN services | T08–T10 — token service, signup, login/logout | ✅ done |
-| HTTP layer | T11–T12 — signup/login/logout routes, `authenticate` middleware | ✅ done |
-| Refresh endpoint | T13 — `POST /refresh` route over rotation logic | ✅ done |
-| Email flows | T14–T16 — mail adapter, email verification, password reset/change | ✅ done |
-| MFA | T17–T18 — TOTP utility, enroll/confirm/disable, recovery codes | ✅ done |
-| Authorization | T19 — RBAC service, `requirePermission`, policy registry, `can()` | 🚧 in progress |
-| Hardening | T20–T21 — rate limiting, CSRF, audit integration, config validation | ⬜ planned |
-| Packaging | T22 — `createAuth` factory, examples, docs | ⬜ planned |
+- **Rate limiter** (`createMemoryRateLimit`) — sliding-window counters stored in a `Map`
+- **TOTP replay store** (`createMemoryReplayStore`) — anti-replay keys stored in a `Map`
 
-The rotation + reuse-detection *logic* (T08) is implemented at the service layer; the `/refresh` HTTP route that exposes it (T13) is in progress.
+**This means the current implementation is single-process only.** In any deployment with more than one Node.js process (Node cluster, PM2 cluster mode, multiple Kubernetes pods, any load-balanced setup), each process maintains its own independent counters. A user rate-limited on process A is not rate-limited on process B. A TOTP code used on process A can be replayed on process B within the same 30-second window.
+
+**The roadmap fix is a Redis-backed adapter** for both components. Both interfaces (`RateLimitAdapter`, replay store) are minimal — 2-3 methods each — and straightforward to implement against Redis. This upgrade is the highest-priority next step before any horizontally-scaled deployment.
+
+Until then: run oathkeeper on a **single process only**, or implement and plug in the Redis adapters.
 
 ---
 
 ## What you get
 
-- **Password storage** with argon2id (memory-hard, GPU-resistant), tuned to OWASP 2023 parameters.
-- **Stateless access tokens** (short-lived JWTs, HS256, algorithm-pinned) + **stateful refresh tokens** (long-lived, hashed at rest, rotated on every use).
-- **Refresh token rotation with reuse detection** — a stolen token self-destructs the moment the legitimate user acts.
-- **Account-enumeration defenses** — uniform responses and constant-time login regardless of whether an account exists.
-- **MFA** via TOTP (RFC 6238) with replay protection and one-time recovery codes. *(planned)*
-- **Email verification and password reset** with opaque, single-use, time-bound tokens. *(planned)*
-- **Authorization** — RBAC as the floor, an optional ABAC-style policy registry for resource-level rules. *(planned)*
-- **Hardening** — dual-key rate limiting, double-submit CSRF, and a structured audit log. *(planned)*
-- **Adapter pattern everywhere** — swap the hasher, signer, storage, rate limiter, or mail transport without touching auth logic.
+- **Password storage** with argon2id (memory-hard, GPU-resistant), tuned to OWASP 2023 parameters
+- **Stateless access tokens** (short-lived JWTs, HS256, algorithm-pinned) + **stateful refresh tokens** (long-lived, SHA-256-hashed at rest, rotated on every use)
+- **Refresh token rotation with reuse detection** — a stolen token self-destructs the moment the legitimate user acts
+- **Account enumeration defenses** — uniform responses and constant-time login regardless of whether an account exists
+- **MFA** via TOTP (RFC 6238) with replay protection and argon2id-hashed one-time recovery codes
+- **Email verification** and **password reset** with opaque, single-use, time-bound tokens
+- **Authorization** — RBAC as the floor, an optional ABAC-style policy registry for resource-level rules
+- **Rate limiting** — dual-key (per-email + per-IP) on login, per-IP on refresh and MFA endpoints
+- **CSRF protection** — double-submit cookie pattern for cookie-mode deployments
+- **Structured audit log** — every auth event written to `auth_events` with `user_id`, IP, user-agent, and JSONB metadata
+- **Boot-time config validation** — bad config crashes at startup with an actionable error, not during a user's first login
+- **Adapter pattern everywhere** — swap the hasher, signer, storage, rate limiter, or mail transport without touching auth logic
 
 ---
 
 ## Requirements
 
 - Node.js 22+
-- PostgreSQL 14+ (uses `gen_random_uuid()` via `pgcrypto`, `CITEXT`, and `timestamptz`)
-- An email transport you provide (any function matching the `MailAdapter` contract)
+- PostgreSQL 16+ (uses `gen_random_uuid()`, `CITEXT`, `JSONB`, `INET`, `timestamptz`)
+- An email transport you provide (any object matching `{ sendMail: async ({ to, subject, html }) => {} }`)
 
-`oathkeeper` never opens its own database connection, mail transport, or HTTP server. The host application provides all three.
+oathkeeper never opens its own database connection, mail transport, or HTTP server. The host application provides all three.
 
 ---
 
@@ -59,408 +56,492 @@ The rotation + reuse-detection *logic* (T08) is implemented at the service layer
 npm install oathkeeper
 ```
 
-> Heads-up: `argon2` is a native module that compiles on install. If it fails, you likely need C build tools (`node-gyp`); try `npm install --build-from-source argon2`. On ARM Macs this sometimes needs the Xcode CLI tools.
-
----
-
-## Quickstart *(target API — T22)*
-
-```js
-const express = require('express');
-const { Pool } = require('pg');
-const { createAuth } = require('oathkeeper');
-
-const app = express();
-app.use(express.json());
-
-const auth = createAuth({
-  db: new Pool({ connectionString: process.env.DATABASE_URL }),
-  jwtSecret: process.env.JWT_SECRET,            // 32+ bytes, or it refuses to boot
-  sendMail: async ({ to, subject, html }) => {  // host's transport
-    // wire up SendGrid / SES / Postmark / nodemailer here
-  },
-});
-
-// Mount the auth routes under a prefix
-app.use('/auth', auth.router);
-
-// Protect a route
-app.get('/profile', auth.middleware.authenticate, (req, res) => {
-  res.json(req.user);
-});
-
-app.listen(3000);
-```
-
-That's signup, login, logout, refresh, email verification, password reset, and MFA — all mounted under `/auth`.
+> `argon2` is a native module that compiles on install. If it fails, you likely need C build tools: `npm install --build-from-source argon2`. On ARM Macs this sometimes needs the Xcode Command Line Tools.
 
 ---
 
 ## Database setup
 
-The schema lives in `src/migrations/` as plain SQL files applied in order. A small runner applies them idempotently (`CREATE TABLE IF NOT EXISTS`, etc.).
+Run the migrations before starting the server:
 
 ```bash
-# example, adjust to your script
-node scripts/migrate.js
+npm run db:migrate
+# or: node --env-file=.env scripts/migrate.js
 ```
 
-The migrations create:
+```bash
+# Spin up a local Postgres for development:
+docker run -e POSTGRES_PASSWORD=dev -p 5432:5432 -d postgres:16
+```
 
-| File | Table(s) | Purpose |
+| Migration | Table(s) | Purpose |
 |---|---|---|
-| `001_users.sql` | `users` | accounts (UUID PK, `CITEXT` email, `password_hash`, soft-delete) |
-| `002_refresh_tokens.sql` | `refresh_tokens` | hashed refresh tokens with `family_id` + `replaced_by_id` |
-| `003_email_verification.sql` | `email_verification_tokens` | one-time, hashed, time-bound |
-| `004_password_reset.sql` | `password_reset_tokens` | one-time, hashed, shorter TTL |
-| `005_mfa.sql` | `mfa_recovery_codes` | argon2id-hashed backup codes |
-| `006_rbac.sql` | `roles`, `permissions`, `user_roles`, `role_permissions` | role-based access control |
-| `007_auth_events.sql` | `auth_events` | structured audit log (JSONB metadata) |
+| `001_users.sql` | `users` | Accounts (UUID PK, `CITEXT` email, `password_hash`, soft-delete) |
+| `002_refresh_tokens.sql` | `refresh_tokens` | Hashed refresh tokens with `family_id` + rotation chain |
+| `003_email_verification_tokens.sql` | `email_verification_tokens` | One-time, hashed, time-bound |
+| `004_password_reset_tokens.sql` | `password_reset_tokens` | One-time, hashed, 30-minute TTL |
+| `005_mfa_recovery_codes.sql` | `mfa_recovery_codes` | argon2id-hashed backup codes, single-use |
+| `006_rbac.sql` | `roles`, `permissions`, `user_roles`, `role_permissions` | Role-based access control |
+| `007_auth_events.sql` | `auth_events` | Structured audit log (JSONB metadata, indexed by `user_id` and `type`) |
 
-Key schema decisions:
+---
 
-- **UUID primary keys** so IDs don't leak sequential counts or enable enumeration.
-- **`CITEXT` email** for case-insensitive uniqueness without `LOWER()` gymnastics on every query.
-- **Soft delete** (`deleted_at`) preserves the audit trail and avoids breaking foreign keys; every read filters `WHERE deleted_at IS NULL`.
-- **Token tables store hashes, never raw tokens.** The raw token is the credential and lives only in the user's hands.
+## Quickstart — 30 lines to working auth
 
-```sql
-CREATE TABLE users (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email          CITEXT UNIQUE NOT NULL,
-  password_hash  TEXT NOT NULL,
-  email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-  mfa_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
-  mfa_secret     TEXT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_login_at  TIMESTAMPTZ,
-  deleted_at     TIMESTAMPTZ
-);
-CREATE INDEX users_email_idx ON users(email) WHERE deleted_at IS NULL;
+```bash
+# Generate a strong secret (required — the library refuses to boot without it)
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+```js
+const express = require('express');
+const { Pool } = require('pg');
+const { createAuth, createConsoleMail } = require('oathkeeper');
+
+const app = express();
+app.use(express.json());
+
+const auth = createAuth({
+  pool: new Pool({ connectionString: process.env.DATABASE_URL }),
+  jwtSecret: process.env.JWT_SECRET,   // ≥ 32 bytes — crashes at boot if wrong or missing
+  baseUrl: 'http://localhost:3000',    // used in email links
+  mailer: createConsoleMail(),         // prints emails to stdout — swap for real transport
+});
+
+// Mounts: POST /auth/signup  /auth/login  /auth/logout  /auth/refresh
+//         /auth/login/mfa    /auth/password/reset/request  /auth/password/reset/confirm
+//         /auth/password/change  /auth/mfa/enroll  /auth/mfa/confirm  /auth/mfa/disable
+app.use('/auth', auth.router);
+
+// Protect any route — populates req.user or returns 401
+app.get('/profile', auth.authenticate, (req, res) => {
+  res.json({ user: req.user });
+});
+
+app.listen(3000, () => console.log('http://localhost:3000'));
+```
+
+That's signup, login, logout, refresh, email verification, password reset, password change, and MFA — running.
+
+See `examples/minimal/index.js` for a copy-pasteable version and `examples/full/index.js` for rate limiting, CSRF, RBAC, and ABAC policies.
 
 ---
 
 ## Configuration reference
 
-A single config object is passed to `createAuth()`. There is no global state. Durations are strings (`'15m'`, `'30d'`). Required keys throw **at boot**, not at first request.
-
 ```js
-createAuth({
-  // ---- REQUIRED ----
-  db,                                  // pg.Pool (or a storage adapter)
-  jwtSecret: process.env.JWT_SECRET,   // >= 32 bytes
-  sendMail: async ({ to, subject, html }) => { /* ... */ },
+const auth = createAuth({
+  // ── required ──────────────────────────────────────────────────────
+  pool,                                  // pg.Pool — you open it, you close it
+  jwtSecret: process.env.JWT_SECRET,     // ≥ 32 bytes of real entropy
+  baseUrl: 'https://app.example.com',    // prefix for email verification / reset URLs
+  mailer: { sendMail: async ({ to, subject, html }) => { /* ... */ } },
 
-  // ---- OPTIONAL (defaults shown) ----
-  accessTokenTtl: '15m',
-  refreshTokenTtl: '30d',
-  passwordReset:    { ttl: '30m' },
-  emailVerification:{ ttl: '24h', required: true },
-  mfa:              { enabled: true, issuer: 'MyApp' },
+  // ── optional (defaults shown) ─────────────────────────────────────
+  accessTokenTtl:  '15m',    // JWT TTL — must be > 0
+  refreshTokenTtl: '7d',     // DB token TTL — must be ≥ accessTokenTtl
+  issuer: 'oathkeeper',      // shown in TOTP authenticator apps
 
-  cookies: {
-    enabled: true,    // cookie mode vs header mode
-    secure: true,     // HTTPS-only; warns loudly if false in production
+  // Cookie mode: refresh token as HttpOnly cookie (browser).
+  // Header mode (default): both tokens in JSON body (mobile / API).
+  cookieMode: false,
+  cookieOptions: {
+    secure: true,            // false in production → loud warning (not crash)
     sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
   },
 
-  rateLimit: {
-    loginPerIp:      { limit: 20, windowMs: 15 * 60 * 1000 },
-    loginPerAccount: { limit: 5,  windowMs: 15 * 60 * 1000 },
+  // argon2 tuning — lower for tests, never lower for production
+  hasherConfig: {
+    memoryCost: 65536,       // 64 MB
+    timeCost: 3,
+    parallelism: 4,
   },
 
-  adapters: {
-    hasher: undefined,       // default: argon2id
-    tokenSigner: undefined,  // default: HS256
-    storage: undefined,      // default: PostgresStorage
-    rateLimit: undefined,    // default: in-memory (single-process only)
+  // Rate limiters — built with createRateLimitMiddleware(), passed here
+  rateLimiters: {
+    login:   [perEmailLimiter, perIpLimiter],
+    refresh: [refreshIpLimiter],
+    mfa:     [],             // falls back to login limiters if omitted
   },
 
-  policies: {
-    // ABAC-style resource checks, keyed by permission name
-    'document:edit': (user, doc) => doc.ownerId === user.id,
-  },
+  csrf: false,               // true enables double-submit CSRF (cookie mode only)
+  nodeEnv: process.env.NODE_ENV,
 });
 ```
 
-| Key | Type | Default | Notes |
+| Key | Required | Default | Description |
 |---|---|---|---|
-| `db` | `pg.Pool` | — | **required** |
-| `jwtSecret` | string | — | **required**, ≥ 32 bytes |
-| `sendMail` | async fn | — | **required**; the library will not boot without it |
-| `accessTokenTtl` | duration | `'15m'` | must be > 0 and < 24h |
-| `refreshTokenTtl` | duration | `'30d'` | must be longer than `accessTokenTtl` |
-| `passwordReset.ttl` | duration | `'30m'` | short by design — a reset implies someone may be probing |
-| `emailVerification.ttl` | duration | `'24h'` | — |
-| `emailVerification.required` | boolean | `true` | gate logins on a verified email |
-| `mfa.enabled` | boolean | `true` | enables the TOTP flows |
-| `mfa.issuer` | string | — | shown in authenticator apps |
-| `cookies.enabled` | boolean | `true` | cookie mode (browser) vs header mode (API/mobile) |
-| `cookies.secure` | boolean | `true` | `false` in production triggers a loud warning |
-| `cookies.sameSite` | string | `'lax'` | CSRF posture |
-| `rateLimit.*` | object | see above | per-IP and per-account limits |
-| `adapters.*` | object | sensible defaults | swap any external dependency |
-| `policies` | object | `{}` | permission → `(user, resource) => boolean \| Promise<boolean>` |
-
-Why boot-time validation is opinionated-but-correct: a misconfigured `jwtSecret: 'dev'` in production means forgeable tokens. Catching it when the server *starts* — with an actionable error — is strictly better than discovering it on a user's first login.
+| `pool` | ✅ | — | `pg.Pool` instance |
+| `jwtSecret` | ✅ | — | Min 32 bytes. Crashes at boot if missing or too short |
+| `baseUrl` | ✅ | — | Used in email verification and password reset links |
+| `mailer` | ✅ | — | `{ sendMail: async ({ to, subject, html }) => {} }` |
+| `accessTokenTtl` | | `'15m'` | JWT lifetime. `'0s'` is rejected at boot |
+| `refreshTokenTtl` | | `'7d'` | DB token lifetime. Must be ≥ `accessTokenTtl` |
+| `issuer` | | `'oathkeeper'` | TOTP issuer label in authenticator apps |
+| `cookieMode` | | `false` | `true` → HttpOnly cookie. `false` → JSON body |
+| `cookieOptions` | | `{}` | Forwarded to `res.cookie()` |
+| `hasherConfig` | | argon2 defaults | `{ memoryCost, timeCost, parallelism }` |
+| `rateLimiters` | | `{}` | Map of middleware arrays per route group |
+| `csrf` | | `false` | Enable double-submit cookie CSRF (cookie mode only) |
+| `nodeEnv` | | `process.env.NODE_ENV` | Used for production cookie-security warning |
 
 ---
 
 ## The `auth` object
 
-`createAuth()` returns:
-
 ```js
-auth.router                                  // Express Router, mount under a prefix
-auth.middleware.authenticate                 // populate req.user / req.auth or 401
-auth.middleware.requirePermission(perm)      // 403 unless the user holds `perm`
-auth.middleware.requireRole(role)            // 403 unless the user has `role`
-auth.middleware.rateLimit(opts)              // reusable limiter factory
-auth.middleware.csrf                          // double-submit cookie guard
-auth.services.users                          // user CRUD
-auth.services.tokens                         // issue / rotate / revoke tokens
-auth.services.rbac                           // role & permission management
-auth.services.mfa                            // enroll / confirm / disable
-auth.can(user, action, resource?)            // the core authorization check
+auth.router           // Express Router — mount with app.use('/auth', auth.router)
+auth.authenticate     // Middleware: populates req.user + req.auth, or 401
+auth.storage          // Raw storage adapter — needed to build rbacService
+auth.authService      // Service: signup, login, logout, email, password, MFA
+auth.tokenService     // Service: issue, rotate, revoke tokens
+auth.mfaService       // Service: enroll, confirm, disable MFA
 ```
 
-Example wiring with authorization:
+### `req.user` after `authenticate`
 
 ```js
-app.delete('/documents/:id',
-  auth.middleware.authenticate,
-  auth.middleware.requirePermission('document:delete'),
-  async (req, res) => {
-    const doc = await getDoc(req.params.id);
-    if (!auth.can(req.user, 'document:delete', doc)) return res.sendStatus(403);
-    await deleteDoc(doc.id);
-    res.sendStatus(204);
-  }
-);
+req.user = {
+  id:            '<uuid>',
+  email:         'alice@example.com',
+  email_verified: true,
+  mfa_enabled:   false,
+  last_login_at: '2025-01-01T00:00:00.000Z',
+  permissions:   Set { 'doc:read', 'doc:edit' },  // Set<string>
+  roles:         [{ id: '<uuid>', name: 'editor' }],
+};
+
+req.auth = {
+  tokenPayload:   { sub: '<uuid>', email: '...', iat: ..., exp: ... },
+  isMfaSatisfied: false,
+};
 ```
+
+`authenticate` does a live DB lookup on every request — a soft-deleted or suspended user is rejected with `AUTH.USER_NOT_FOUND` even if their JWT is valid and unexpired.
 
 ---
 
 ## HTTP routes
 
-All mounted under whatever prefix you pass to `app.use()` (the README assumes `/auth`).
+All routes mount under whatever prefix you choose (examples use `/auth`).
 
-| Method | Path | Auth | Purpose |
+| Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/signup` | anon | create an account |
-| `POST` | `/login` | anon | email + password → tokens, or an MFA challenge |
-| `POST` | `/login/mfa` | mfaToken | submit a TOTP / recovery code to finish login *(planned)* |
-| `POST` | `/refresh` | refresh token | rotate → new access + refresh pair |
-| `POST` | `/logout` | refresh token | revoke refresh token, clear cookies |
-| `POST` | `/email/verify/request` | authenticated | send a verification email *(planned)* |
-| `GET` | `/email/verify/confirm?token=…` | anon | confirm email *(planned)* |
-| `POST` | `/password/reset/request` | anon | send a reset email (always generic 200) *(planned)* |
-| `POST` | `/password/reset/confirm` | anon | submit token + new password *(planned)* |
-| `POST` | `/password/change` | authenticated | change password with current password *(planned)* |
-| `POST` | `/mfa/enroll` | authenticated | begin TOTP enrollment *(planned)* |
-| `POST` | `/mfa/confirm` | authenticated | verify first code, activate MFA *(planned)* |
-| `POST` | `/mfa/disable` | authenticated | disable MFA (requires password **and** code) *(planned)* |
-| `GET` | `/me` | authenticated | current user info |
+| `POST` | `/signup` | — | Create account. 201 on success, 409 on duplicate email |
+| `POST` | `/login` | — | Email + password → tokens, or MFA challenge |
+| `POST` | `/login/mfa` | mfaToken | Submit TOTP code or recovery code to finish login |
+| `POST` | `/refresh` | refresh token | Rotate → new access + refresh pair |
+| `POST` | `/logout` | refresh token | Revoke refresh token, clear cookie |
+| `POST` | `/password/reset/request` | — | Send reset email (always 200, enumeration-safe) |
+| `POST` | `/password/reset/confirm` | — | Token + new password → reset + revoke all sessions |
+| `POST` | `/password/change` | Bearer | Current password + new password |
+| `POST` | `/mfa/enroll` | Bearer | Begin TOTP enrollment — returns secret + otpauth URI |
+| `POST` | `/mfa/confirm` | Bearer | Submit first code to activate MFA + get recovery codes |
+| `POST` | `/mfa/disable` | Bearer | Disable MFA (requires password **and** TOTP code) |
 
 ### Cookie mode vs header mode
 
-- **Cookie mode** (browser): the refresh token is set as an `HttpOnly`, `Secure`, `SameSite=Lax` cookie scoped to **`Path: /auth/refresh`**, so the browser only ever sends it to that one endpoint — not to every API call. The access token comes back in the JSON body and is meant to live in memory. This narrows the CSRF surface dramatically.
-- **Header mode** (mobile / API / CLI): both tokens are returned in the JSON body and the client sends the access token as `Authorization: Bearer <token>`.
+**Header mode** (default — mobile / API / CLI): both tokens returned in the JSON response body. Client stores the access token in memory and sends it as `Authorization: Bearer <token>`.
 
-> The refresh cookie's `Path` must match the mount point exactly. If the cookie is `Path: /auth/refresh` but the route is mounted elsewhere, the browser never sends the cookie and refresh silently fails.
+**Cookie mode** (`cookieMode: true` — browser): the refresh token is set as an `HttpOnly`, `Secure`, `SameSite=Lax` cookie scoped to `Path: /auth/refresh`, so the browser only sends it to that one endpoint. The access token comes back in the JSON body and is stored in memory (never in `localStorage`). When `csrf: true`, login also sets a non-HttpOnly `csrf_token` cookie for the double-submit pattern.
+
+> The refresh cookie `Path` must exactly match the mount point. If you mount at `/api/auth`, the cookie needs `path: '/api/auth/refresh'` — pass this in `cookieOptions`.
 
 ---
 
-## The request contract
-
-After `authenticate` succeeds, two objects are attached to the request:
+## Rate limiting
 
 ```js
-req.user = {
-  id: '<uuid>',
-  email: '<string>',
-  emailVerified: false,
-  mfaEnabled: false,
-  roles: ['user', 'editor'],
-  permissions: ['document:read', 'document:write'], // a Set or documented array
-};
+const { createMemoryRateLimit, createRateLimitMiddleware } = require('oathkeeper');
 
-req.auth = {
-  tokenPayload: { /* raw JWT claims */ },
-  isMfaSatisfied: true,
-};
+// ⚠️ In-memory — single-process only. See the warning at the top of this README.
+const adapter = createMemoryRateLimit();
+
+const perEmailLimiter = createRateLimitMiddleware({
+  keyFn: (req) => req.body?.email?.toLowerCase(),
+  limit: 5,
+  windowMs: 15 * 60 * 1000,
+  adapter,
+});
+
+const perIpLimiter = createRateLimitMiddleware({
+  keyFn: (req) => req.ip,
+  limit: 20,
+  windowMs: 15 * 60 * 1000,
+  adapter,
+});
+
+const auth = createAuth({
+  ...
+  rateLimiters: { login: [perEmailLimiter, perIpLimiter] },
+});
 ```
 
-`authenticate` verifies the JWT signature **first** (cheap), then does a database lookup by `sub` (a DB hit). The lookup enforces **hard revocation**: a soft-deleted, suspended, or locked user is rejected with `401` even if their token is otherwise valid and unexpired.
+On the 6th attempt within the window, `AUTH.RATE_LIMITED` (429) is returned with a `Retry-After` header.
+
+The sliding-window algorithm smooths counter resets so a user cannot burst exactly at window boundaries. When a key has been idle for 2× the window duration, its entry is deleted from memory — the Map does not grow unboundedly.
 
 ---
 
-## Token model
+## CSRF protection
 
-Two tokens, two jobs:
-
-| Token | Lifetime | Stored? | Sent on |
-|---|---|---|---|
-| Access | short (`15m`) | no — stateless JWT | every request |
-| Refresh | long (`30d`) | yes — SHA-256 hash + metadata | only `/refresh` |
-
-**Rotation + reuse detection.** Every refresh token is single-use. Using one revokes it and issues a replacement in the same `family_id`. If a token that has *already* been rotated is presented again, that's reuse — the entire token family is revoked and the user is logged out everywhere. This bounds the blast radius of a stolen refresh token to the window before the legitimate user's next refresh.
-
-**Tokens are hashed at rest.** The database stores `SHA-256(rawToken)`, never the raw value. (SHA-256 is appropriate here precisely because tokens are long, high-entropy random values — no dictionary attack applies, unlike passwords.)
-
-**Rotation is transactional.** Revoking the old token and issuing the new one happen atomically. A partial failure that revoked the old token without issuing a new one would lock the user out permanently.
-
-> **Known false positive.** A client on a flaky connection can receive a new token but fail to persist it before the connection drops, then retry with the old (now-revoked) token — which fires reuse detection. Treat `AUTH.REFRESH_REUSE_DETECTED` as "ask the user to log in again," not as a confirmed breach.
-
----
-
-## Authorization model *(planned — T19)*
-
-A hybrid model: **RBAC is the floor, policies narrow.**
-
-- **RBAC** answers the coarse question — does this user hold `document:edit` through any of their roles? It's a binary check against the user's permission set.
-- **Policies** answer resource-level questions RBAC can't express — "can Alice edit *this specific* document?" You register a function per permission:
+Enabled with `csrf: true` alongside `cookieMode: true`.
 
 ```js
-policies: {
-  'document:edit': (user, doc) => doc.ownerId === user.id,
-}
+const auth = createAuth({
+  cookieMode: true,
+  cookieOptions: { secure: true, sameSite: 'lax' },
+  csrf: true,
+});
 ```
 
-`can(user, action, resource?)` runs RBAC first; only if RBAC passes does it run the registered policy. **Policies can only restrict, never grant** — an attacker can't manufacture access by manipulating a resource's attributes, because RBAC is always checked first. Async policies returning a `Promise<boolean>` are supported and awaited.
+How it works:
+1. Successful login sets a non-HttpOnly `csrf_token` cookie (JavaScript-readable).
+2. Your client reads the cookie and sends it as `X-CSRF-Token` on every mutating request.
+3. The server compares the header to the cookie in constant time on `POST /refresh` and other cookie-mode endpoints.
+4. A cross-origin attacker cannot read the victim's `csrf_token` (Same-Origin Policy), so it cannot forge the header.
+
+Automatically skipped for `Authorization: Bearer` requests — not cookie-based, not vulnerable.
 
 ---
 
-## MFA *(planned — T17–T18)*
+## Authorization (RBAC + policies)
 
-TOTP per RFC 6238 (HMAC-SHA1, 6 digits, 30-second period, ±1 window for clock skew), with:
-
-- **Two-step enrollment** — `beginEnrollment` returns a secret + `otpauth://` URI but stores the secret as *pending*; MFA only activates after `confirmEnrollment` proves the user scanned the QR code by submitting a valid code. This prevents lock-out from a half-finished enrollment.
-- **Replay protection** — a code used once cannot be reused within its window.
-- **Recovery codes** — 10 one-time codes generated at confirmation, returned in plaintext exactly once, stored as **argon2id** hashes (they're short and human-readable, so they need slow hashing).
-- **A purpose-scoped challenge token** — after a correct password, MFA users receive a 5-minute JWT carrying `purpose: 'mfa_challenge'`. `/login/mfa` validates that claim explicitly so that no other JWT signed with the same secret (e.g. an access token) can be used to bypass the second factor.
-
----
-
-## Email-driven flows *(planned — T14–T16)*
-
-Email verification and password reset use **opaque, single-use, time-bound tokens** stored as `SHA-256` hashes (not JWTs — simpler to revoke and to enforce single-use). The atomic consume pattern guarantees one-shot semantics under concurrency:
-
-```sql
-UPDATE tokens
-   SET used_at = now()
- WHERE id = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING *;
-```
-
-If two requests race the same token, exactly one gets a row back; the other gets nothing. The database is the lock.
-
-Two non-negotiable invariants:
-
-- **Password reset revokes all of the user's refresh tokens.** Reset is a recovery tool; if it didn't kill existing sessions, a hijacked session would survive the reset. This is not configurable.
-- **Enumeration-safe responses.** `/password/reset/request` and `/email/verify/request` return the same generic `200` whether or not the email exists.
-
----
-
-## Adapters
-
-Every external dependency sits behind an interface, so you can replace any layer without touching auth logic.
+RBAC is app-level — the library provides the mechanism, your application provides the rules.
 
 ```js
-// PasswordHasher
-{ hash(plaintext) => Promise<string>, verify(plaintext, hash) => Promise<boolean> }
+const { createRbacService, createPermissions, createRoleGuard } = require('oathkeeper');
 
-// TokenSigner
-{ sign(payload, options) => string, verify(token) => payload /* or throws */ }
+const rbac = createRbacService({
+  storage: auth.storage,   // shares the same pg.Pool
+  policies: {
+    // ABAC policy: RBAC grants 'doc:edit', policy narrows to document owners.
+    // Policies can ONLY restrict, never grant — RBAC is always checked first.
+    'doc:edit': (user, doc) => doc.ownerId === user.id,
+  },
+});
 
-// StorageAdapter — createUser, findUserByEmail, findUserById, updateUser,
-//   softDeleteUser, saveRefreshToken, findRefreshToken, rotateRefreshToken,
-//   revokeRefreshToken, revokeRefreshTokenFamily, revokeAllUserTokens,
-//   saveToken, consumeToken, saveMfaRecoveryCodes, consumeMfaRecoveryCode,
-//   assignRole, removeRole, getRolesForUser, getUserPermissions, logEvent
+const { requirePermission } = createPermissions({ rbacService: rbac });
+const { requireRole }       = createRoleGuard({ rbacService: rbac });
 
-// RateLimitAdapter
-{ increment(key, windowMs) => { count, ttl }, reset(key) => void }
+// Role + permission CRUD
+const editorRole = await rbac.createRole('editor');
+await rbac.addPermissionToRole(editorRole.id, 'doc:edit');
+await rbac.assignRole(userId, editorRole.id);
 
-// MailAdapter — host MUST provide
-async sendMail({ to, subject, html, text }) => void
+// Route guards
+app.put('/documents/:id', auth.authenticate, requirePermission('doc:edit'), handler);
+app.get('/admin',         auth.authenticate, requireRole('admin'),          handler);
+
+// Programmatic check with ABAC policy
+const allowed = await rbac.can(req.user, 'doc:edit', document);
 ```
 
-Defaults baked in for v1: HS256 single-key signing, argon2id hashing, in-memory rate limiting, Postgres storage. Documented adapter slots for scale: RS256/ES256 with JWKS, Redis rate limiting, Redis permission cache, a `jti` revocation denylist, and a Kafka/ClickHouse event sink.
+**How `can()` works:**
+1. Checks RBAC — does this user hold the permission through any role?
+2. If yes, and a policy is registered for this permission, runs the policy with `(user, resource)`.
+3. Returns `true` only if both pass.
+
+Policies can only restrict, never grant. An attacker cannot manufacture access by manipulating a resource's attributes because RBAC is always the floor.
+
+---
+
+## MFA (TOTP)
+
+Enrollment is two-step to prevent lock-out from half-finished setup:
+
+```js
+// Step 1: begin — returns secret + otpauth:// URI for QR code
+POST /auth/mfa/enroll
+→ { secret: 'BASE32...', uri: 'otpauth://totp/...' }
+
+// Step 2: confirm — prove the user scanned the QR code
+POST /auth/mfa/confirm  { "code": "123456" }
+→ { recoveryCodes: ["a1b2c3...", ...] }   // 10 codes, shown once, store safely
+
+// Login flow when MFA is enabled:
+POST /auth/login  { email, password }
+→ 403  { code: "AUTH.MFA_REQUIRED", mfaToken: "<jwt>" }
+
+POST /auth/login/mfa  { mfaToken, code }
+→ { user, accessToken, refreshToken }     // code can be TOTP or recovery code
+```
+
+Recovery codes are argon2id-hashed at rest, single-use, and returned in plaintext exactly once.
+
+---
+
+## Email flows
+
+These are service-layer calls, not built-in routes, so you control when and how they're triggered:
+
+```js
+// After signup — send verification email
+await auth.authService.requestEmailVerification(user, { ip, userAgent });
+
+// When the user clicks the link in the email
+await auth.authService.confirmEmailVerification(token, { ip, userAgent });
+```
+
+Password reset has built-in routes (`/password/reset/request`, `/password/reset/confirm`) but can also be called directly:
+
+```js
+await auth.authService.requestPasswordReset(email, { ip, userAgent });
+await auth.authService.confirmPasswordReset({ token, newPassword, ip, userAgent });
+```
+
+Password reset **revokes all refresh tokens** for the user — an attacker's stolen session cannot survive a reset.
+
+---
+
+## Audit log
+
+Every auth event is written to `auth_events` automatically. No configuration needed.
+
+| Event type | Trigger |
+|---|---|
+| `signup` | New account created |
+| `login.success` | Successful password login |
+| `login.failure` | Wrong password or unknown email |
+| `login.mfa_success` | MFA login completed |
+| `logout` | Refresh token revoked |
+| `token.refresh` | Refresh token rotated |
+| `token.reuse_detected` | Rotated token presented again (family revoked) |
+| `email_verification.requested` | Verification email sent |
+| `email_verification.confirmed` | Email confirmed |
+| `password.reset.requested` | Reset email sent |
+| `password.reset.completed` | Password reset via token |
+| `password.changed` | Password changed (authenticated) |
+| `mfa.enabled` | MFA enrollment confirmed |
+| `mfa.disabled` | MFA disabled |
+
+Each row includes `user_id`, `ip`, `user_agent`, `occurred_at`, and a `metadata` JSONB column for event-specific context (e.g., `token.reuse_detected` includes the `familyId`).
 
 ---
 
 ## Error model
 
-Three categories: user-facing (`4xx`, JSON, generic messages), programming (throw at boot with full detail), and internal (`500`, generic externally, full detail logged server-side). Stack traces are never sent to clients.
-
-Errors use a stable, namespaced shape so consumers can branch programmatically:
+All errors use a consistent JSON shape:
 
 ```json
 { "error": { "code": "AUTH.INVALID_CREDENTIALS", "message": "Invalid email or password" } }
 ```
 
+Stack traces are never sent to clients. Internal errors return a generic `500` response and are logged to `console.error` server-side.
+
 ### Error code reference
 
-| Code | HTTP | Meaning / client action |
+| Code | HTTP | Meaning |
 |---|---|---|
-| `AUTH.INVALID_CREDENTIALS` | 401 | wrong password **or** unknown email (deliberately indistinguishable) |
-| `AUTH.TOKEN_EXPIRED` | 401 | access token expired → silently hit `/refresh` and retry |
-| `AUTH.INVALID_TOKEN` | 401 | malformed / bad signature → redirect to login |
-| `AUTH.USER_NOT_FOUND` | 401 | token valid but the user is gone (soft-deleted) |
-| `AUTH.INVALID_REFRESH_TOKEN` | 401 | unknown or expired refresh token |
-| `AUTH.REFRESH_REUSE_DETECTED` | 401 | a rotated token was reused → family revoked, log in again |
-| `AUTH.MFA_REQUIRED` | 200/401 | password OK, second factor needed (carries an `mfaToken`) |
-| `AUTH.INVALID_MFA_CODE` | 401 | wrong TOTP / recovery code |
-| `AUTH.RATE_LIMITED` | 429 | too many attempts; honor the `Retry-After` header |
+| `AUTH.INVALID_CREDENTIALS` | 401 | Wrong password or unknown email (deliberately indistinguishable) |
+| `AUTH.INVALID_TOKEN` | 401 | Malformed token or bad signature → redirect to login |
+| `AUTH.TOKEN_EXPIRED` | 401 | Access token expired → call `/refresh` and retry |
+| `AUTH.USER_NOT_FOUND` | 401 | Token valid but user deleted or suspended |
+| `AUTH.INVALID_REFRESH_TOKEN` | 401 | Unknown, expired, or already-used refresh token |
+| `AUTH.REFRESH_REUSE_DETECTED` | 401 | Rotated token reused — family revoked, log in again |
+| `AUTH.MFA_REQUIRED` | 403 | Password correct, second factor needed (carries `mfaToken`) |
+| `AUTH.INVALID_MFA_CODE` | 401 | Wrong TOTP code or recovery code |
+| `AUTH.MFA_ALREADY_ENABLED` | 409 | MFA enrollment attempted when already active |
+| `AUTH.INVALID_OR_EXPIRED_TOKEN` | 401 | One-time token (verification/reset) invalid or expired |
+| `AUTH.WEAK_PASSWORD` | 422 | Password too short or on the common-passwords list |
+| `AUTH.FORBIDDEN` | 403 | `requirePermission` or `requireRole` rejected the request |
+| `AUTH.ROLE_EXISTS` | 409 | `createRole` called with a name that already exists |
+| `AUTH.RATE_LIMITED` | 429 | Too many attempts — honor the `Retry-After` header |
+| `AUTH.CSRF_INVALID` | 403 | CSRF token missing or mismatched |
 
-`TOKEN_EXPIRED` and `INVALID_TOKEN` are intentionally distinct: clients silently refresh on the former and redirect to login on the latter. Collapsing them into a generic `401` would remove the client's ability to make that decision.
+`AUTH.TOKEN_EXPIRED` and `AUTH.INVALID_TOKEN` are intentionally distinct. Clients should silently call `/refresh` on the former and redirect to login on the latter. Collapsing them would remove the client's ability to make that decision.
 
 ---
 
-## Security model
+## Adapters
 
-The defenses, and the attack each one closes:
+Every external dependency sits behind an interface. Swap any layer without touching auth logic.
 
-| Defense | Attack it stops |
-|---|---|
-| argon2id (memory-hard, ~250ms/hash) | GPU brute-force of leaked password hashes |
-| Constant-time verify (library `.verify()`, never `===`) | timing-based hash extraction |
-| Dummy hash on unknown email (computed once at module load) | account enumeration via login timing |
-| Identical error/response for "no user" vs "wrong password" | account enumeration via messages |
-| Algorithm-pinned JWT verify (`algorithms: ['HS256']`) | the `alg: none` forgery class (CVE-2015-9235) |
-| Refresh tokens hashed at rest, rotated each use | DB-leak token theft + replay |
-| Family revocation on reuse | stolen / hijacked refresh tokens |
-| `purpose` claim on the MFA challenge token | MFA bypass with an unrelated valid JWT |
-| Update field whitelist | mass-assignment privilege escalation |
-| `WHERE deleted_at IS NULL` on every read | soft-deleted users logging back in |
-| Revoke-all-on-password-reset | attacker session surviving a reset |
-| Double-submit CSRF token (cookie mode) | cross-site forged state changes |
-| Per-IP + per-account rate limits | brute force and credential spraying |
-| Parameterized queries (`$1`, `$2`) everywhere | SQL injection |
+```js
+// PasswordHasher
+{ hash(plaintext): Promise<string>, verify(plaintext, hash): Promise<boolean> }
+
+// TokenSigner
+{ sign(payload, options): string, verify(token): payload }  // throws on invalid
+
+// StorageAdapter
+// Full interface: createUser, getUserByEmail, getUserById, getCredentialByEmail,
+// updateUser, updatePassword, softDeleteUser,
+// saveRefreshToken, getRefreshToken, rotateRefreshToken, revokeRefreshToken,
+// revokeRefreshTokenFamily, revokeAllRefreshTokensForUser, listActiveSessions,
+// saveToken, consumeToken,
+// saveMfaRecoveryCodes, getMfaRecoveryCodes, consumeMfaRecoveryCode, deleteMfaRecoveryCodes,
+// getMfaSecret,
+// createRole, deleteRole, addPermissionToRole, removePermissionFromRole,
+// assignRole, removeRole, getRolesForUser, getUserPermissions,
+// logEvent, withTransaction
+
+// RateLimitAdapter
+{ isRateLimited(key, limit, windowMs): boolean, reset(key): void }
+
+// ReplayStore
+{ has(key): boolean, set(key, ttlSeconds): void }
+
+// MailAdapter
+{ sendMail({ to, subject, html }): Promise<void> }
+```
 
 ---
 
 ## Production checklist
 
-- [ ] `JWT_SECRET` is ≥ 32 bytes of real randomness (not a copied dev value).
-- [ ] `cookies.secure: true` and the app is served over HTTPS.
-- [ ] A real `sendMail` transport is wired up (the console transport is dev-only).
-- [ ] The refresh cookie `Path` matches your mount prefix exactly.
-- [ ] **Swap the in-memory rate limiter for a Redis-backed adapter** in any multi-process / multi-pod deployment — the in-memory limiter is **single-process only** and each process keeps its own counters.
-- [ ] Audit-log retention and shipping are configured.
-- [ ] Migrations have been applied to the production database.
-- [ ] You've documented the `REFRESH_REUSE_DETECTED` false-positive handling for your clients.
+- [ ] `JWT_SECRET` is ≥ 32 bytes of real randomness — not a copied dev value, not in version control
+- [ ] `cookieOptions.secure: true` and the application is served over HTTPS
+- [ ] `mailer` is a real transport (SendGrid, SES, Postmark, nodemailer) — `createConsoleMail()` is dev-only
+- [ ] Migrations have been applied to the production database
+- [ ] **Replace `createMemoryRateLimit()` with a Redis-backed adapter** for any multi-process or horizontally-scaled deployment — the in-memory adapter is single-process only and does not share state across pods
+- [ ] **Replace `createMemoryReplayStore()` with a Redis-backed adapter** for the same reason — TOTP codes can be replayed across processes with the in-memory store
+- [ ] The refresh cookie `Path` matches your mount prefix exactly
+- [ ] Audit log retention and shipping are configured (ship `auth_events` rows to your SIEM or log aggregator)
+- [ ] `AUTH.REFRESH_REUSE_DETECTED` handling is documented for your clients — it's sometimes a false positive on flaky connections, not always a breach
 
 ---
 
-## Threat model — scope
+## Security model summary
 
-**Defended:** brute force, credential stuffing (with MFA), session hijacking, CSRF (cookie mode), token replay, account enumeration, timing attacks, insecure password reset, mass assignment at signup.
+| Defense | Attack it closes |
+|---|---|
+| argon2id, 64MB, ~250ms/hash | GPU brute-force of leaked password hashes |
+| Constant-time comparison (`timingSafeEqual`) | Timing-based secret extraction |
+| Dummy hash on unknown email | Account enumeration via login response timing |
+| Identical error for "no user" and "wrong password" | Account enumeration via response messages |
+| Algorithm-pinned JWT verify (`algorithms: ['HS256']`) | `alg: none` forgery (CVE-2015-9235) |
+| JWT secret ≥ 32 bytes enforced at boot | Offline brute-force of captured tokens |
+| Refresh tokens hashed at rest (SHA-256), rotated each use | DB-dump token theft + replay |
+| Family revocation on reuse | Stolen/hijacked refresh token persistence |
+| `purpose: 'mfa_challenge'` claim | MFA bypass using an unrelated valid JWT |
+| DB field whitelist in `updateUser` | Mass-assignment privilege escalation |
+| `WHERE deleted_at IS NULL` on every read | Soft-deleted users logging back in |
+| Revoke-all-sessions on password reset | Attacker session surviving a reset |
+| Double-submit CSRF token (cookie mode) | Cross-site forged state changes |
+| Per-email + per-IP rate limiting on login | Brute force and credential spraying |
+| Per-IP rate limiting on `/refresh` and `/login/mfa` | Token brute force and TOTP brute force |
+| TOTP replay store (per-window, hashed key) | TOTP code reuse within the 30-second window |
+| Atomic one-time-token consume (`UPDATE ... WHERE used_at IS NULL RETURNING *`) | Race-condition double-use of reset/verification tokens |
+| Parameterized queries everywhere | SQL injection |
+| Enumeration-safe reset/verify responses | Email address harvesting via reset endpoint |
 
-**Out of scope for v1 (your responsibility):** business-logic authorization beyond RBAC + policies, API-key auth, SSRF, WebAuthn / passkeys, suspicious-login geo/device signals, and a HaveIBeenPwned check at signup. The design leaves adapter seams for several of these.
+---
+
+## Testing
+
+```bash
+npm test         # vitest — unit + integration
+npm run lint     # eslint
+```
+
+Integration tests run against a real Postgres instance and truncate tables between test cases. Set `DATABASE_URL` before running.
+
+Two tests are treated as non-negotiable anchors:
+
+- **Concurrent one-time-token consume** — `Promise.all` of two simultaneous consumes; exactly one must win.
+- **TOTP RFC 6238 Appendix D vectors** — the 10 published HOTP test vectors; generated codes must match the spec exactly.
 
 ---
 
@@ -469,46 +550,60 @@ The defenses, and the attack each one closes:
 ```
 oathkeeper/
 ├── src/
-│   ├── index.js                 # public entry point
-│   ├── createAuth.js            # main factory (T22)
-│   ├── routes/                  # signup, login, refresh, logout, email, password, mfa
-│   ├── middleware/              # authenticate, requirePermission, requireRole, rateLimit, csrf
-│   ├── services/                # authService, tokenService, userService, mfaService, rbacService
-│   ├── adapters/                # storage/, hasher/, tokenSigner/, rateLimit/, mail/
-│   ├── utils/                   # jwt, totp, random, constantTime, errors
-│   └── migrations/              # 001_users.sql … 007_auth_events.sql
-├── examples/                    # minimal/ and full/
-└── tests/                       # unit/ and integration/
+│   ├── index.js                 public entry point + all exports
+│   ├── config/
+│   │   └── validate.js          boot-time config validation
+│   ├── services/
+│   │   ├── authService.js
+│   │   ├── tokenService.js
+│   │   ├── mfaService.js
+│   │   └── rbacService.js
+│   ├── routes/
+│   │   └── index.js  signup  login  logout  refresh  password  mfa
+│   ├── middleware/
+│   │   └── authenticate  errorMapper  rateLimit  csrf  requirePermission  requireRole
+│   ├── adapters/
+│   │   └── storage/  hasher/  rateLimit/  replayStore/  mail/
+│   ├── utils/
+│   │   └── jwt  totp  random  encodeDecode  constantTime
+│   ├── constants/
+│   │   └── passwords.js
+│   ├── error.js
+│   └── migrations/
+│       └── 001_users  002_refresh_tokens  003_email_verification  004_password_reset
+│           005_mfa_recovery_codes  006_rbac  007_auth_events
+├── examples/
+│   ├── minimal/index.js         signup + login in ~30 lines
+│   └── full/index.js            rate limiting, CSRF, RBAC, MFA, audit log
+├── docs/
+│   ├── architecture.md          three-layer design + data flow diagrams
+│   └── threat-model.md          defended threats, out-of-scope, assumptions
+└── tests/
+    └── (18 test files, 271 tests)
 ```
 
 ---
 
-## Testing
+## Build status
 
-```bash
-npm test        # unit + integration (vitest)
-npm run lint
-```
+All 22 tasks complete. 271 tests passing.
 
-Integration tests run against a local Postgres and truncate tables between cases. Two tests are treated as non-negotiable:
-
-- **Concurrent one-time-token consume** — fire two simultaneous consumes with `Promise.all` and assert exactly one wins.
-- **TOTP RFC 6238 vectors** — generated codes must match the spec's published test vectors.
-
-A quick local Postgres for development:
-
-```bash
-docker run -e POSTGRES_PASSWORD=dev -p 5432:5432 -d postgres:16
-```
-
----
-
-## Contributing
-
-This is a learning-first project. If you've shipped auth before, the most valuable place to look is the **token rotation + reuse-detection** path in `tokenService.js` — that's where the subtle bugs live. Issues and reviews that point at a specific attack or edge case are especially welcome.
+| Phase | Tasks | State |
+|---|---|---|
+| Setup & foundations | T01–T05 — skeleton, migrations, crypto utils, password hasher, JWT util | ✅ |
+| Storage layer | T06–T07 — Postgres adapters, RBAC + audit schema | ✅ |
+| Core auth services | T08–T10 — token service, signup, login/logout | ✅ |
+| HTTP layer | T11–T12 — signup/login/logout routes, `authenticate` middleware | ✅ |
+| Refresh endpoint | T13 — `POST /refresh`, rotation + reuse detection | ✅ |
+| Email flows | T14–T16 — mail adapter, email verification, password reset/change | ✅ |
+| MFA | T17–T18 — TOTP utility (RFC 6238), enroll/confirm/disable, recovery codes | ✅ |
+| Authorization | T19 — RBAC service, `requirePermission`, `requireRole`, `can()`, policy registry | ✅ |
+| Hardening | T20 — rate limiting (sliding window), CSRF (double-submit cookie) | ✅ |
+| Audit + validation | T21 — audit log coverage, boot-time config validation | ✅ |
+| Packaging | T22 — `createAuth` factory, examples, README, architecture + threat model docs | ✅ |
 
 ---
 
 ## License
 
-MIT.
+MIT — Shubham Lakhera

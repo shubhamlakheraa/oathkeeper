@@ -5,46 +5,51 @@ const { createJwtSigner } = require('./utils/jwt');
 const { createTokenService } = require('./services/tokenService');
 const { createAuthService } = require('./services/authService');
 const { createMfaService } = require('./services/mfaService');
+const { createRbacService } = require('./services/rbacService');
 const { createMemoryReplayStore } = require('./adapters/replayStore/memoryReplayStore');
 const { createAuthenticate } = require('./middleware/authenticate');
 const { createAuthRouter } = require('./routes/index');
 
 /**
- * Top-level factory. Wires all services, adapters, and middleware together and
- * returns an Express router ready to mount at your chosen path.
+ * Top-level factory — the single public entry point.
  *
- * Config is validated at call time — the process will throw a descriptive error
- * immediately rather than failing silently on the first user request.
+ * Validates config at call time (fail-fast: crash at boot, not at first login),
+ * wires all internal adapters, services, and middleware, and returns a ready-to-mount
+ * Express router plus the raw service layer for app-level composition.
  *
  * @param {{
  *   pool: import('pg').Pool,
- *   jwtSecret: string,                  // min 32 bytes — see error message for generation hint
- *   accessTokenTtl?: string,            // default '15m'
- *   refreshTokenTtl?: string,           // default '7d'
- *   baseUrl: string,                    // used in email links, e.g. 'https://app.example.com'
+ *   jwtSecret: string,         min 32 bytes — generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ *   accessTokenTtl?: string,   default '15m'
+ *   refreshTokenTtl?: string,  default '7d'
+ *   baseUrl: string,           used in email links, e.g. 'https://app.example.com'
  *   mailer: { sendMail: Function },
- *   issuer?: string,                    // TOTP issuer shown in authenticator apps
- *   cookieMode?: boolean,               // default false — send tokens as HttpOnly cookies
- *   cookieOptions?: object,             // forwarded to res.cookie()
- *   hasherConfig?: object,              // argon2 tuning (memoryCost, timeCost, parallelism)
- *   rateLimiters?: { login?: any[], refresh?: any[], mfa?: any[] },
- *   csrf?: boolean,                     // default false — enable double-submit CSRF (cookie mode only)
- *   nodeEnv?: string,                   // defaults to process.env.NODE_ENV
+ *   issuer?: string,           TOTP issuer shown in authenticator apps, default 'oathkeeper'
+ *   cookieMode?: boolean,      default false — HttpOnly cookie vs body token
+ *   cookieOptions?: object,    forwarded to res.cookie()
+ *   hasherConfig?: object,     argon2 tuning { memoryCost, timeCost, parallelism }
+ *   rateLimiters?: {
+ *     login?: Middleware[],    applied to POST /login  (per-email + per-IP)
+ *     refresh?: Middleware[],  applied to POST /refresh
+ *     mfa?: Middleware[],      applied to POST /login/mfa (falls back to login limiters)
+ *   },
+ *   csrf?: boolean,            default false — double-submit cookie (cookie mode only)
+ *   nodeEnv?: string,          defaults to process.env.NODE_ENV
  * }} config
  *
  * @returns {{
- *   router: import('express').Router,
- *   storage,
+ *   router: import('express').Router,  mount with app.use('/auth', auth.router)
+ *   authenticate: Middleware,          populates req.user + req.auth, or 401
+ *   storage,                           raw storage adapter (needed to build rbacService)
  *   authService,
  *   tokenService,
  *   mfaService,
- *   authenticate,
  * }}
  *
- * RBAC is app-level — wire it after createAuth:
- *   const { createRbacService } = require('oathkeeper/services/rbacService');
+ * RBAC is app-level — build it after createAuth using the returned storage:
+ *   const { createRbacService, createPermissions } = require('oathkeeper');
  *   const rbac = createRbacService({ storage: auth.storage, policies: { 'doc:edit': ... } });
- *   app.get('/docs/:id', auth.authenticate, rbac.requirePermission('doc:edit'), handler);
+ *   const { requirePermission } = createPermissions({ rbacService: rbac });
  */
 function createAuth({
   pool,
@@ -61,7 +66,6 @@ function createAuth({
   csrf = false,
   nodeEnv = process.env.NODE_ENV,
 }) {
-  // Fail fast — bad config must surface at boot, not during a user's first login.
   validateConfig({ jwtSecret, accessTokenTtl, refreshTokenTtl, cookieMode, cookieOptions, nodeEnv });
 
   const storage = createPostgresStorage(pool);
@@ -93,7 +97,44 @@ function createAuth({
     csrf,
   });
 
-  return { router, storage, authService, tokenService, mfaService, authenticate };
+  return { router, authenticate, storage, authService, tokenService, mfaService };
 }
 
+// ─── public API ──────────────────────────────────────────────────────────────
+// Everything a consuming application may need to import directly.
+
+// Main factory
 module.exports = { createAuth };
+
+// Error classes — import for instanceof checks and error code handling
+const errors = require('./error');
+Object.assign(module.exports, errors);
+
+// RBAC — app-level; build after createAuth using the returned storage
+const { createPermissions } = require('./middleware/requirePermission');
+const { createRoleGuard } = require('./middleware/requireRole');
+module.exports.createRbacService = createRbacService;
+module.exports.createPermissions = createPermissions;
+module.exports.createRoleGuard = createRoleGuard;
+
+// Rate limiting — create adapters + middleware, pass to createAuth({ rateLimiters })
+const { createMemoryRateLimit } = require('./adapters/rateLimit/memoryRateLimit');
+const { createRateLimitMiddleware } = require('./middleware/rateLimit');
+module.exports.createMemoryRateLimit = createMemoryRateLimit;
+module.exports.createRateLimitMiddleware = createRateLimitMiddleware;
+
+// CSRF — createCsrfMiddleware is used internally; setCsrfCookie is exported for custom flows
+const { createCsrfMiddleware, setCsrfCookie } = require('./middleware/csrf');
+module.exports.createCsrfMiddleware = createCsrfMiddleware;
+module.exports.setCsrfCookie = setCsrfCookie;
+
+// Storage adapter — export for testing custom adapters against the same interface
+module.exports.createPostgresStorage = createPostgresStorage;
+
+// Mail adapters
+const { createConsoleMail } = require('./adapters/mail/consoleMail');
+module.exports.createConsoleMail = createConsoleMail;
+
+// Error mapper middleware — re-export so apps can use the same error shape
+const { errorMapper } = require('./middleware/errorMapper');
+module.exports.errorMapper = errorMapper;
