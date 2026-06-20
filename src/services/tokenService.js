@@ -33,6 +33,7 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
   async function rotateRefreshToken(oldRawToken, { userAgent, ip }) {
     const oldHash = sha256(oldRawToken);
     let reuseFamilyId = null;
+    let reuseUserId = null;
 
     try {
       return await storage.withTransaction(async (client) => {
@@ -41,6 +42,7 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
 
         if (prev.revoked_at) {
           reuseFamilyId = prev.family_id;
+          reuseUserId = prev.user_id;
           throw new RefreshTokenReuseError();
         }
         if (prev.expires_at <= new Date()) throw new InvalidRefreshTokenError();
@@ -62,11 +64,18 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
 
         if (status !== 'SUCCESS') {
           reuseFamilyId = prev.family_id;
+          reuseUserId = prev.user_id;
           throw new RefreshTokenReuseError();
         }
 
         const user = await storage.getUserById(prev.user_id, { client });
         if (!user) throw new InvalidRefreshTokenError();
+
+        await storage.logEvent(
+          { userId: user.id, type: 'token.refresh', ip, userAgent },
+          { client },
+        );
+
         return {
           refreshToken: newRawToken,
           accessToken: issueAccessToken(user),
@@ -76,6 +85,13 @@ function createTokenService({ storage, signer, accessTokenTtl, refreshTokenTtl }
       if (reuseFamilyId) {
         try {
           await storage.revokeRefreshTokenFamily(reuseFamilyId);
+          await storage.logEvent({
+            userId: reuseUserId,
+            type: 'token.reuse_detected',
+            ip,
+            userAgent,
+            metadata: { familyId: reuseFamilyId },
+          });
         } catch (revokeErr) {
           console.error('FAMILY_REVOKE_FAILED', {
             familyId: reuseFamilyId,

@@ -11,7 +11,10 @@ function createPasswordRouter({ authService, authenticate, cookieMode }) {
       if (!email) {
         return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'email is required' } });
       }
-      const result = await authService.requestPasswordReset(email);
+      const result = await authService.requestPasswordReset(email, {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
       return res.json(result);
     } catch (err) {
       next(err);
@@ -24,7 +27,12 @@ function createPasswordRouter({ authService, authenticate, cookieMode }) {
       if (!token || !newPassword) {
         return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'token and newPassword are required' } });
       }
-      await authService.confirmPasswordReset({ token, newPassword });
+      await authService.confirmPasswordReset({
+        token,
+        newPassword,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
       return res.json({ message: 'Password has been reset.' });
     } catch (err) {
       next(err);
@@ -43,6 +51,8 @@ function createPasswordRouter({ authService, authenticate, cookieMode }) {
         currentPassword,
         newPassword,
         currentRefreshToken: rawRefreshToken,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
       });
 
       return res.json({ message: 'Password changed.' });
