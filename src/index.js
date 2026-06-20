@@ -29,7 +29,6 @@ const { createAuthRouter } = require('./routes/index');
  *   hasherConfig?: object,              // argon2 tuning (memoryCost, timeCost, parallelism)
  *   rateLimiters?: { login?: any[], refresh?: any[], mfa?: any[] },
  *   csrf?: boolean,                     // default false — enable double-submit CSRF (cookie mode only)
- *   policies?: Record<string, Function>,// ABAC policy functions for can()
  *   nodeEnv?: string,                   // defaults to process.env.NODE_ENV
  * }} config
  *
@@ -41,6 +40,11 @@ const { createAuthRouter } = require('./routes/index');
  *   mfaService,
  *   authenticate,
  * }}
+ *
+ * RBAC is app-level — wire it after createAuth:
+ *   const { createRbacService } = require('oathkeeper/services/rbacService');
+ *   const rbac = createRbacService({ storage: auth.storage, policies: { 'doc:edit': ... } });
+ *   app.get('/docs/:id', auth.authenticate, rbac.requirePermission('doc:edit'), handler);
  */
 function createAuth({
   pool,
@@ -55,7 +59,6 @@ function createAuth({
   hasherConfig,
   rateLimiters = {},
   csrf = false,
-  policies = {},
   nodeEnv = process.env.NODE_ENV,
 }) {
   // Fail fast — bad config must surface at boot, not during a user's first login.
