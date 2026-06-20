@@ -80,7 +80,14 @@ function createAuthRouter({
     csrfMiddleware,
   }));
   router.use(createPasswordRouter({ authService, authenticate, cookieMode }));
-  router.use(createMfaRouter({ authService, mfaService, authenticate, cookieMode, cookieOptions }));
+  router.use(createMfaRouter({
+    authService,
+    mfaService,
+    authenticate,
+    cookieMode,
+    cookieOptions,
+    rateLimiters: rateLimiters.mfa || rateLimiters.login || [],
+  }));
   return router;
 }
 

@@ -11,7 +11,12 @@ function createMemoryRateLimit() {
 
     const elapsed = now - entry.windowStart;
     if (elapsed >= windowMs) {
-      entry.prevCount = elapsed < windowMs * 2 ? entry.currentCount : 0;
+      if (elapsed >= windowMs * 2) {
+        store.delete(key);
+        entry.prevCount = 0;
+      } else {
+        entry.prevCount = entry.currentCount;
+      }
       entry.currentCount = 0;
       entry.windowStart = now;
     }
