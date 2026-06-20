@@ -39,20 +39,21 @@ const {
 // process B unimpeded. Swap createMemoryRateLimit() for a Redis-backed adapter
 // before deploying behind a load balancer or in any horizontally-scaled environment.
 //
-const loginAdapter = createMemoryRateLimit();
+const emailAdapter = createMemoryRateLimit();
+const ipAdapter    = createMemoryRateLimit();
 
 const perEmailLimiter = createRateLimitMiddleware({
   keyFn: (req) => req.body?.email?.toLowerCase(),
   limit: 5,
   windowMs: 15 * 60 * 1000, // 5 attempts per account per 15 min
-  adapter: loginAdapter,
+  adapter: emailAdapter,
 });
 
 const perIpLimiter = createRateLimitMiddleware({
   keyFn: (req) => req.ip,
   limit: 20,
   windowMs: 15 * 60 * 1000, // 20 attempts per IP per 15 min
-  adapter: loginAdapter,
+  adapter: ipAdapter,
 });
 
 const refreshAdapter = createMemoryRateLimit();
