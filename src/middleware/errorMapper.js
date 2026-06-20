@@ -14,6 +14,8 @@ const HTTP_STATUS = {
   'AUTH.MFA_ALREADY_ENABLED': 409,
   'AUTH.FORBIDDEN': 403,
   'AUTH.ROLE_EXISTS': 409,
+  'AUTH.RATE_LIMITED': 429,
+  'AUTH.CSRF_INVALID': 403,
 };
 
 function errorMapper(err, _req, res, _next) {

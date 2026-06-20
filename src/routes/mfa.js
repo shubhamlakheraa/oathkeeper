@@ -1,6 +1,6 @@
 const express = require('express');
 
-function createMfaRouter({ authService, mfaService, authenticate, cookieMode = false, cookieOptions = {} }) {
+function createMfaRouter({ authService, mfaService, authenticate, cookieMode = false, cookieOptions = {}, rateLimiters = [] }) {
   const router = express.Router();
 
   router.post('/mfa/enroll', authenticate, async (req, res, next) => {
@@ -28,7 +28,7 @@ function createMfaRouter({ authService, mfaService, authenticate, cookieMode = f
     } catch (err) { next(err); }
   });
 
-  router.post('/login/mfa', async (req, res, next) => {
+  router.post('/login/mfa', ...rateLimiters, async (req, res, next) => {
     try {
       const { mfaToken, code } = req.body;
       if (!mfaToken || !code) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'mfaToken and code are required' } });
