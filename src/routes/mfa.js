@@ -14,7 +14,10 @@ function createMfaRouter({ authService, mfaService, authenticate, cookieMode = f
     try {
       const { code } = req.body;
       if (!code) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'code is required' } });
-      const result = await mfaService.confirmEnrollment(req.user, code);
+      const result = await mfaService.confirmEnrollment(req.user, code, {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
       return res.json(result);
     } catch (err) { next(err); }
   });
@@ -23,7 +26,12 @@ function createMfaRouter({ authService, mfaService, authenticate, cookieMode = f
     try {
       const { password, code } = req.body;
       if (!password || !code) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'password and code are required' } });
-      await mfaService.disable(req.user, { password, code });
+      await mfaService.disable(req.user, {
+        password,
+        code,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
       return res.json({ message: 'MFA disabled.' });
     } catch (err) { next(err); }
   });

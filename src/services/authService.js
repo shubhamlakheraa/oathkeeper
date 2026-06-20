@@ -78,7 +78,7 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
     await storage.logEvent({ userId, type: 'logout', ip, userAgent });
   }
 
-  async function requestEmailVerification(user) {
+  async function requestEmailVerification(user, { ip = null, userAgent = null } = {}) {
     const rawToken = generateToken();
     const tokenHash = sha256(rawToken);
     const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS);
@@ -89,23 +89,23 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
       subject: 'Verify your email',
       html: `Click to verify: <a href="${verifyUrl}">${verifyUrl}</a>`,
     });
-    await storage.logEvent({ userId: user.id, type: 'email_verification.requested' });
+    await storage.logEvent({ userId: user.id, type: 'email_verification.requested', ip, userAgent });
   }
 
-  async function confirmEmailVerification(rawToken) {
+  async function confirmEmailVerification(rawToken, { ip = null, userAgent = null } = {}) {
     const tokenHash = sha256(rawToken);
     await storage.withTransaction(async (client) => {
       const tokenRow = await storage.consumeToken(tokenHash, 'email_verification', { client });
       if (!tokenRow) throw new InvalidOrExpiredTokenError();
       await storage.updateUser(tokenRow.user_id, { email_verified: true }, { client });
       await storage.logEvent(
-        { userId: tokenRow.user_id, type: 'email_verification.confirmed' },
+        { userId: tokenRow.user_id, type: 'email_verification.confirmed', ip, userAgent },
         { client },
       );
     });
   }
 
-  async function requestPasswordReset(email) {
+  async function requestPasswordReset(email, { ip = null, userAgent = null } = {}) {
     const user = await storage.getUserByEmail(email);
     if (user) {
       const rawToken = generateToken();
@@ -118,11 +118,12 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
         subject: 'Reset your Password',
         html: `Click to reset: <a href="${resetUrl}">${resetUrl}</a>`,
       });
+      await storage.logEvent({ userId: user.id, type: 'password.reset.requested', ip, userAgent });
     }
     return { message: 'If an account exists with that email, a reset link has been sent.' };
   }
 
-  async function confirmPasswordReset({ token, newPassword }) {
+  async function confirmPasswordReset({ token, newPassword, ip = null, userAgent = null }) {
     if (newPassword.length < 12) throw new WeakPasswordError('Password must be at least 12 characters');
     if (COMMON_PASSWORDS.has(newPassword)) throw new WeakPasswordError('Password is too common');
 
@@ -133,14 +134,17 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
       const consumed = await storage.consumeToken(tokenHash, 'password_reset', { client });
       if (!consumed) throw new InvalidOrExpiredTokenError();
       await storage.updatePassword(consumed.user_id, passwordHash, { client });
-      await storage.logEvent({ userId: consumed.user_id, type: 'password.reset.completed' }, { client });
+      await storage.logEvent(
+        { userId: consumed.user_id, type: 'password.reset.completed', ip, userAgent },
+        { client },
+      );
       return consumed.user_id;
     });
 
     await tokenService.revokeAllForUser(userId);
   }
 
-  async function changePassword(user, { currentPassword, newPassword, currentRefreshToken }) {
+  async function changePassword(user, { currentPassword, newPassword, currentRefreshToken, ip = null, userAgent = null }) {
     const credential = await storage.getCredentialByEmail(user.email);
     const valid = await hasher.verify(currentPassword, credential.password_hash);
     if (!valid) throw new InvalidCredentialsError();
@@ -156,7 +160,7 @@ function createAuthService({ storage, hasher, tokenService, signer, mailer, conf
     const ownToken = currentToken?.user_id === user.id ? currentToken : null;
     await tokenService.revokeAllForUser(user.id, { exceptTokenId: ownToken?.id });
 
-    await storage.logEvent({ userId: user.id, type: 'password.changed' });
+    await storage.logEvent({ userId: user.id, type: 'password.changed', ip, userAgent });
 
     return { message: 'Password changed.' };
   }

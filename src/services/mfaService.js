@@ -11,7 +11,7 @@ function createMfaService({ storage, hasher, issuer, replayStore }) {
     return { secret, uri };
   }
 
-  async function confirmEnrollment(user, code) {
+  async function confirmEnrollment(user, code, { ip = null, userAgent = null } = {}) {
     const secret = await storage.getMfaSecret(user.id);
     if (!secret) throw new InvalidMfaCodeError();
 
@@ -24,13 +24,13 @@ function createMfaService({ storage, hasher, issuer, replayStore }) {
     await storage.withTransaction(async (client) => {
       await storage.saveMfaRecoveryCodes(user.id, hashedCodes, { client });
       await storage.updateUser(user.id, { mfa_enabled: true }, { client });
-      await storage.logEvent({ userId: user.id, type: 'mfa.enabled' }, { client });
+      await storage.logEvent({ userId: user.id, type: 'mfa.enabled', ip, userAgent }, { client });
     });
 
     return { recoveryCodes: plaintextCodes };
   }
 
-  async function disable(user, { password, code }) {
+  async function disable(user, { password, code, ip = null, userAgent = null }) {
     const credential = await storage.getCredentialByEmail(user.email);
     const passwordValid = await hasher.verify(password, credential.password_hash);
     if (!passwordValid) throw new InvalidCredentialsError();
@@ -40,7 +40,7 @@ function createMfaService({ storage, hasher, issuer, replayStore }) {
 
     await storage.updateUser(user.id, { mfa_secret: null, mfa_enabled: false });
     await storage.deleteMfaRecoveryCodes(user.id);
-    await storage.logEvent({ userId: user.id, type: 'mfa.disabled' });
+    await storage.logEvent({ userId: user.id, type: 'mfa.disabled', ip, userAgent });
 
     return { message: 'MFA disabled.' };
   }
